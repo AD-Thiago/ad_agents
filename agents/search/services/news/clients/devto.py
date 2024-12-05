@@ -1,120 +1,66 @@
-# agents/search/services/news/clients/devto.py
-
-from typing import List, Optional
+import asyncio
 import aiohttp
+from typing import List, Dict, Optional
 from datetime import datetime, timezone
-from pydantic import BaseModel, HttpUrl
-import logging
+from ..models import NewsArticle
 from ...utils.rate_limiter import RateLimiter
+import logging
 
 logger = logging.getLogger(__name__)
 
-class DevToArticle(BaseModel):
-    """Modelo para artigos do Dev.to"""
-    id: int
-    title: str
-    description: Optional[str]
-    url: HttpUrl
-    published_at: datetime
-    tag_list: List[str]
-    user: dict
-    reading_time_minutes: Optional[int]
-    comments_count: Optional[int]
-    public_reactions_count: Optional[int]
-
-    class Config:
-        json_encoders = {
-            datetime: lambda v: v.isoformat()
-        }
-
 class DevToClient:
     """Cliente para a API do Dev.to"""
-    
-    def __init__(self, api_key: Optional[str] = None):
-        self.base_url = "https://dev.to/api"
-        self.api_key = api_key
-        # Dev.to tem limite de 3000 requests/hora
-        self.rate_limiter = RateLimiter(max_calls=3000, period=3600)
-        
-    def _ensure_timezone(self, dt: datetime) -> datetime:
-        """Garante que a data tem timezone (UTC se não especificado)"""
-        if dt.tzinfo is None:
-            return dt.replace(tzinfo=timezone.utc)
-        return dt
 
-    async def get_articles(
-        self,
-        search_term: Optional[str] = None,
-        tag: Optional[str] = None,
-        username: Optional[str] = None,
-        page: int = 1,
-        per_page: int = 30
-    ) -> List[DevToArticle]:
-        """Busca artigos no Dev.to"""
-        params = {
-            "page": page,
-            "per_page": min(per_page, 1000)
-        }
-        
-        if tag:
-            params["tag"] = tag
-        if username:
-            params["username"] = username
-            
-        headers = {}
-        if self.api_key:
-            headers["api-key"] = self.api_key
-        
+    def __init__(self, api_url: str, api_key: Optional[str], session: aiohttp.ClientSession):
+        self.api_url = api_url
+        self.api_key = api_key
+        self.session = session
+        self.rate_limiter = RateLimiter(max_calls=3000, period=3600)
+
+    async def search_articles(self, search_term: str, tag: Optional[str] = None) -> List[NewsArticle]:
+        """
+        Busca artigos no Dev.to com base no termo de pesquisa e tags opcionais.
+        """
         try:
+            logger.info(f"Buscando artigos no Dev.to com o termo: {search_term}")
+            params = {"per_page": 30}
+            if tag:
+                params["tag"] = tag
+
+            headers = {"api-key": self.api_key} if self.api_key else {}
+
             async with self.rate_limiter:
-                async with aiohttp.ClientSession() as session:
-                    if search_term:
-                        url = f"{self.base_url}/articles/search"
-                        params["q"] = search_term
-                    else:
-                        url = f"{self.base_url}/articles"
-                        
-                    async with session.get(url, params=params, headers=headers) as response:
-                        if response.status == 429:  # Too Many Requests
-                            retry_after = int(response.headers.get("Retry-After", 60))
-                            logger.warning(f"Rate limit hit. Retry after {retry_after} seconds")
-                            return []
-                            
-                        response.raise_for_status()
-                        data = await response.json()
-                        
-                        # Processar as datas antes de criar os objetos
-                        for article in data:
-                            if "published_at" in article:
-                                dt = datetime.fromisoformat(article["published_at"].replace("Z", "+00:00"))
-                                article["published_at"] = self._ensure_timezone(dt)
-                        
-                        return [DevToArticle(**article) for article in data]
-        except aiohttp.ClientError as e:
-            logger.error(f"Error fetching from Dev.to: {str(e)}")
-            return []
+                async with self.session.get(f"{self.api_url}/articles", params=params, headers=headers) as response:
+                    if response.status != 200:
+                        raise Exception(f"Erro ao buscar no Dev.to: {response.status}")
+                    data = await response.json()
+                    logger.debug(f"Dados recebidos da API do Dev.to: {data}")
+                    return [self.to_news_article(article) for article in data]
         except Exception as e:
-            logger.error(f"Unexpected error: {str(e)}")
+            logger.error(f"Erro ao buscar no Dev.to: {str(e)}")
             return []
-    
-    def to_news_article(self, article: DevToArticle) -> "NewsArticle":
-        """Converte DevToArticle para NewsArticle"""
-        from ..models import NewsArticle
-        
-        return NewsArticle(
-            title=article.title,
-            url=str(article.url),
-            source="dev.to",
-            author=article.user.get("name"),
-            published_date=self._ensure_timezone(article.published_at),
-            summary=article.description or "",
-            content=None,
-            tags=article.tag_list,
-            metadata={
-                "reading_time": article.reading_time_minutes,
-                "comments_count": article.comments_count,
-                "reactions_count": article.public_reactions_count,
-                "author_username": article.user.get("username")
-            },
-            relevance_score=0.0
-        )
+
+    def to_news_article(self, article: Dict) -> NewsArticle:
+        """
+        Converte um artigo da API Dev.to para o modelo NewsArticle.
+        """
+        try:
+            published_at = datetime.fromisoformat(article["published_at"])
+            return NewsArticle(
+                title=article["title"],
+                url=article["url"],
+                author=article.get("user", {}).get("name", "Desconhecido"),
+                source="dev.to",
+                published_date=published_at,
+                summary=article.get("description", ""),
+                tags=article.get("tag_list", []),
+                metadata={
+                    "reading_time": article.get("reading_time_minutes", 0),
+                    "comments_count": article.get("comments_count", 0),
+                    "reactions_count": article.get("public_reactions_count", 0)
+                },
+                relevance_score=0.0
+            )
+        except Exception as e:
+            logger.error(f"Erro ao processar artigo do Dev.to: {str(e)}")
+            raise

@@ -1,3 +1,4 @@
+   
 # agents/search/services/news/config.py
 
 from pydantic import BaseSettings, Field
@@ -6,6 +7,9 @@ from datetime import timedelta
 from pathlib import Path
 import os
 from dotenv import load_dotenv
+import logging
+
+logger = logging.getLogger(__name__)
 
 # Carregar variáveis de ambiente do .env
 env_path = Path('.') / '.env'
@@ -15,10 +19,23 @@ class NewsApiConfig(BaseSettings):
     """Configurações para integrações com APIs de notícias"""
     
     # Dev.to
-    DEVTO_API_KEY: Optional[str] = Field(None, env='NEWS_DEVTO_API_KEY')
-    DEVTO_MAX_RESULTS: int = Field(100, env='NEWS_DEVTO_MAX_RESULTS')
-    DEVTO_RATE_LIMIT: int = Field(3000, env='NEWS_DEVTO_RATE_LIMIT')
+    DEVTO_API_URL: str = Field("https://dev.to/api", env='DEVTO_API_URL')
+    DEVTO_API_KEY: Optional[str] = Field(None, env='DEVTO_API_KEY')
+    DEVTO_MAX_RESULTS: int = Field(100, env='DEVTO_MAX_RESULTS')
+    DEVTO_RATE_LIMIT: int = Field(3000, env='DEVTO_RATE_LIMIT')
     
+    # TechCrunch
+    TECH_CRUNCH_API_URL: str = Field("https://api.techcrunch.com/v1", env='TECH_CRUNCH_API_URL')
+    TECH_CRUNCH_API_KEY: Optional[str] = Field(None, env='TECH_CRUNCH_API_KEY')
+    TECH_CRUNCH_MAX_RESULTS: int = Field(100, env='TECH_CRUNCH_MAX_RESULTS')
+    TECH_CRUNCH_RATE_LIMIT: int = Field(3000, env='TECH_CRUNCH_RATE_LIMIT')
+
+    # Hacker News
+    HACKER_NEWS_API_URL: str = Field("http://hn.algolia.com/api/v1", env='HACKER_NEWS_API_URL')
+    HACKER_NEWS_API_KEY: Optional[str] = Field(None, env='HACKER_NEWS_API_KEY')
+    HACKER_NEWS_MAX_RESULTS: int = Field(100, env='HACKER_NEWS_MAX_RESULTS')
+    HACKER_NEWS_RATE_LIMIT: int = Field(3000, env='HACKER_NEWS_RATE_LIMIT')
+
     # Cache
     CACHE_TTL: int = Field(3600, env='NEWS_CACHE_TTL')
     MAX_CACHE_ITEMS: int = Field(10000, env='NEWS_MAX_CACHE_ITEMS')
@@ -35,12 +52,12 @@ class NewsApiConfig(BaseSettings):
     # Limites
     DEFAULT_MAX_RESULTS: int = Field(50, env='NEWS_DEFAULT_MAX_RESULTS')
     MAX_SEARCH_PERIOD: timedelta = Field(
-        default_factory=lambda: timedelta(days=int(os.getenv('NEWS_MAX_SEARCH_PERIOD', '30'))),
+        default_factory=lambda: timedelta(days=float(os.getenv('NEWS_MAX_SEARCH_PERIOD', '30'))),
     )
     
     # Configurações de fontes
     ENABLED_SOURCES: List[str] = Field(
-        default=["dev.to"],
+        default=["dev.to", "tech_crunch", "hacker_news"],
         env='NEWS_ENABLED_SOURCES'
     )
     
@@ -53,3 +70,8 @@ class NewsApiConfig(BaseSettings):
         case_sensitive = True
         env_file = ".env"
         env_file_encoding = 'utf-8'
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        logger.info("Configurações de API carregadas")
+        logger.debug(f"Configurações: {self.dict()}")

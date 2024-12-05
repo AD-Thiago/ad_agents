@@ -40,7 +40,7 @@ class SearchAgentConfig(BaseSettings):
         },
         "hacker_news": {
             "name": "Hacker News",
-            "base_url": "https://hacker-news.firebaseio.com/v0/",
+            "base_url": "http://hn.algolia.com/api/v1",
             "priority": 2,
             "categories": ["technology", "programming"]
         },

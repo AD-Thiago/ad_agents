@@ -1,4 +1,4 @@
-# agents/search/services/utils/rate_limiter.py
+# agents/search/services/news/utils/rate_limiter.py
 
 import asyncio
 from datetime import datetime, timedelta

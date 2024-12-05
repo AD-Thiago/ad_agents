@@ -1,5 +1,3 @@
-# agents/search/services/news/models.py
-
 from typing import List, Dict, Optional, Any
 from datetime import datetime
 from pydantic import BaseModel, Field, HttpUrl

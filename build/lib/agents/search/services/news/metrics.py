@@ -3,14 +3,18 @@
 from prometheus_client import Counter, Histogram, Gauge
 from prometheus_client.registry import CollectorRegistry
 import time
+import asyncio
+import logging
+
+logger = logging.getLogger(__name__)
 
 class NewsMetrics:
     """Sistema de métricas para o serviço de notícias"""
-    
+
     def __init__(self):
         # Criar registry separado para evitar colisões
         self.registry = CollectorRegistry()
-        
+
         # Contadores
         self.request_count = Counter(
             "news_integration_requests",
@@ -18,14 +22,14 @@ class NewsMetrics:
             ["source", "status"],
             registry=self.registry
         )
-        
+
         self.article_count = Counter(
             "news_integration_articles",
             "Total number of articles processed",
             ["source"],
             registry=self.registry
         )
-        
+
         # Histogramas
         self.request_latency = Histogram(
             "news_integration_request_duration",
@@ -33,7 +37,7 @@ class NewsMetrics:
             ["source"],
             registry=self.registry
         )
-        
+
         # Gauges
         self.active_requests = Gauge(
             "news_integration_active_requests",
@@ -49,20 +53,20 @@ class NewsMetrics:
                 self.metrics = metrics
                 self.source = source
                 self.start_time = None
-                
-            def __enter__(self):
+
+            async def __aenter__(self):
                 self.start_time = time.time()
                 self.metrics.active_requests.labels(source=self.source).inc()
                 return self
-                
-            def __exit__(self, exc_type, exc_val, exc_tb):
+
+            async def __aexit__(self, exc_type, exc_val, exc_tb):
                 duration = time.time() - self.start_time
                 self.metrics.request_latency.labels(source=self.source).observe(duration)
                 self.metrics.active_requests.labels(source=self.source).dec()
-                
+
                 status = "error" if exc_type else "success"
                 self.metrics.request_count.labels(source=self.source, status=status).inc()
-                
+
         return RequestTracker(self, source)
 
     def record_processed_article(self, source: str):

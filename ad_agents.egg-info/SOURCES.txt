@@ -25,6 +25,9 @@ setup.py
 ./agents/search/services/news/service.py
 ./agents/search/services/news/clients/__init__.py
 ./agents/search/services/news/clients/devto.py
+./agents/search/services/news/clients/hackernews copy.py
+./agents/search/services/news/clients/hackernews.py
+./agents/search/services/news/clients/techcrunch.py
 ./agents/search/services/utils/__init__.py
 ./agents/search/services/utils/rate_limiter.py
 ./api/__init__.py
@@ -83,6 +86,9 @@ agents/search/services/news/models.py
 agents/search/services/news/service.py
 agents/search/services/news/clients/__init__.py
 agents/search/services/news/clients/devto.py
+agents/search/services/news/clients/hackernews copy.py
+agents/search/services/news/clients/hackernews.py
+agents/search/services/news/clients/techcrunch.py
 agents/search/services/utils/__init__.py
 agents/search/services/utils/rate_limiter.py
 api/__init__.py

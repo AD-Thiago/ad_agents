@@ -44,6 +44,7 @@ Este README foi gerado automaticamente para documentar a estrutura do projeto.
 - [agents\search\services\news\service.py](#agents\search\services\news\service.py)
 - [agents\search\services\news\__init__.py](#agents\search\services\news\__init__.py)
 - [agents\search\services\news\clients\devto.py](#agents\search\services\news\clients\devto.py)
+- [agents\search\services\news\clients\hackernews.py](#agents\search\services\news\clients\hackernews.py)
 - [agents\search\services\news\clients\__init__.py](#agents\search\services\news\clients\__init__.py)
 - [agents\search\services\utils\rate_limiter.py](#agents\search\services\utils\rate_limiter.py)
 - [agents\search\services\utils\__init__.py](#agents\search\services\utils\__init__.py)
@@ -71,6 +72,7 @@ Este README foi gerado automaticamente para documentar a estrutura do projeto.
 - [build\lib\agents\search\services\news\service.py](#build\lib\agents\search\services\news\service.py)
 - [build\lib\agents\search\services\news\__init__.py](#build\lib\agents\search\services\news\__init__.py)
 - [build\lib\agents\search\services\news\clients\devto.py](#build\lib\agents\search\services\news\clients\devto.py)
+- [build\lib\agents\search\services\news\clients\hackernews.py](#build\lib\agents\search\services\news\clients\hackernews.py)
 - [build\lib\agents\search\services\news\clients\__init__.py](#build\lib\agents\search\services\news\clients\__init__.py)
 - [build\lib\agents\search\services\utils\rate_limiter.py](#build\lib\agents\search\services\utils\rate_limiter.py)
 - [build\lib\agents\search\services\utils\__init__.py](#build\lib\agents\search\services\utils\__init__.py)
@@ -433,6 +435,7 @@ setup.py
 ./agents/search/services/news/service.py
 ./agents/search/services/news/clients/__init__.py
 ./agents/search/services/news/clients/devto.py
+./agents/search/services/news/clients/hackernews.py
 ./agents/search/services/utils/__init__.py
 ./agents/search/services/utils/rate_limiter.py
 ./api/__init__.py
@@ -491,6 +494,7 @@ agents/search/services/news/models.py
 agents/search/services/news/service.py
 agents/search/services/news/clients/__init__.py
 agents/search/services/news/clients/devto.py
+agents/search/services/news/clients/hackernews.py
 agents/search/services/utils/__init__.py
 agents/search/services/utils/rate_limiter.py
 api/__init__.py
@@ -1198,7 +1202,7 @@ class ReviewAgentConfig(BaseSettings):
 ```python
 from typing import Dict, List, Optional, Any
 from pydantic import BaseModel, Field
-from datetime import datetime
+from datetime import datetime, timedelta
 import asyncio
 import numpy as np
 from langchain.embeddings import HuggingFaceEmbeddings
@@ -1207,14 +1211,27 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 from core.rabbitmq_utils import RabbitMQUtils
 from core.config import get_settings
 import json
+import time
+from .services.news.metrics import NewsMetrics
+import aiohttp
+from .services.news.clients.hackernews import HackerNewsClient
+from .services.news.clients.devto import DevToClient
+from .services.news.config import NewsApiConfig
+import logging
+
+logger = logging.getLogger(__name__)
 
 class SearchResult(BaseModel):
     """Modelo para resultados de busca"""
-    content: str
+    title: str
+    url: str
+    author: str
     source: str
-    relevance_score: float
+    published_date: datetime
+    summary: str
+    tags: List[str]
     metadata: Dict[str, Any] = Field(default_factory=dict)
-    timestamp: datetime = Field(default_factory=datetime.now)
+    relevance_score: float
 
 class ContentValidation(BaseModel):
     """Modelo para validação de conteúdo"""
@@ -1255,9 +1272,33 @@ class EnhancedSearchAgent:
         )
         self.setup_vector_store()
         self.setup_cache()
+        self.metrics = NewsMetrics()
+        self.news_config = NewsApiConfig()
+        self.hacker_news_client = HackerNewsClient(self.news_config.HACKER_NEWS_API_URL, self.news_config.HACKER_NEWS_API_KEY)
+        self.dev_to_client = DevToClient(self.news_config.DEVTO_API_URL, self.news_config.DEVTO_API_KEY)
+        self.session = None
+
+    async def initialize(self):
+        """Inicializa o agente de pesquisa"""
+        logger.info("Inicializando o agente de pesquisa")
+        await self.hacker_news_client.initialize()
+        await self.dev_to_client.initialize()
+        if not self.session:
+            logger.info("Inicializando sessão HTTP para o agente de pesquisa")
+            self.session = aiohttp.ClientSession()
+
+    async def close(self):
+        """Fecha conexões do agente de pesquisa"""
+        logger.info("Fechando conexões do agente de pesquisa")
+        await self.hacker_news_client.close()
+        await self.dev_to_client.close()
+        if self.session:
+            await self.session.close()
+            self.session = None
 
     def setup_vector_store(self):
         """Configura armazenamento vetorial"""
+        logger.info("Configurando armazenamento vetorial")
         self.vector_store = FAISS.from_texts(
             texts=["inicialização do índice"],
             embedding=self.embeddings,
@@ -1266,6 +1307,7 @@ class EnhancedSearchAgent:
 
     def setup_cache(self):
         """Configura sistema de cache"""
+        logger.info("Configurando sistema de cache")
         self.cache = {}
         self.cache_ttl = 3600  # 1 hora
 
@@ -1273,6 +1315,7 @@ class EnhancedSearchAgent:
         """
         Enriquece o plano de conteúdo com pesquisas e análises
         """
+        logger.info(f"Enriquecendo plano de conteúdo para o tópico: {topic}")
         tasks = [
             self.search_recent_developments(topic),
             self.validate_technical_aspects(topic),
@@ -1280,9 +1323,9 @@ class EnhancedSearchAgent:
             self.gather_seo_insights(keywords),
             self.analyze_audience_preferences(target_audience)
         ]
-        
+
         results = await asyncio.gather(*tasks)
-        
+
         return {
             "recent_developments": results[0],
             "technical_validations": results[1],
@@ -1295,38 +1338,46 @@ class EnhancedSearchAgent:
         """
         Busca desenvolvimentos recentes sobre o tópico
         """
-        # Implementar integração com APIs de notícias/blogs técnicos
-        # Por enquanto, retorna exemplo
-        return [
-            SearchResult(
-                content=f"Último desenvolvimento sobre {topic}",
-                source="tech_news",
-                relevance_score=0.95,
-                metadata={"date": datetime.now().isoformat()}
-            )
-        ]
+        logger.info(f"Buscando desenvolvimentos recentes sobre o tópico: {topic}")
+        # Integração com a API do Hacker News
+        async with self.metrics.track_request("hacker_news"):
+            logger.info("Buscando artigos no Hacker News")
+            hacker_news_results = await self.hacker_news_client.search_stories(topic)
+            logger.debug(f"Resultados do Hacker News: {hacker_news_results}")
+
+        # Integração com a API do Dev.to
+        async with self.metrics.track_request("dev_to"):
+            logger.info("Buscando artigos no Dev.to")
+            dev_to_results = await self.dev_to_client.search_articles(topic)
+            logger.debug(f"Resultados do Dev.to: {dev_to_results}")
+
+        # Combinar resultados de todas as fontes
+        return hacker_news_results + dev_to_results
 
     async def validate_technical_aspects(self, topic: str) -> List[ContentValidation]:
         """
         Valida aspectos técnicos do tópico
         """
+        logger.info(f"Validando aspectos técnicos do tópico: {topic}")
         # Implementar validação contra fontes técnicas confiáveis
-        return [
-            ContentValidation(
-                claim=f"Validação técnica para {topic}",
-                is_valid=True,
-                confidence_score=0.85,
-                supporting_sources=["docs.python.org"],
-                suggestions=["Adicionar mais exemplos práticos"]
-            )
-        ]
+        async with self.metrics.track_request("technical_validation"):
+            return [
+                ContentValidation(
+                    claim=f"Validação técnica para {topic}",
+                    is_valid=True,
+                    confidence_score=0.85,
+                    supporting_sources=["docs.python.org"],
+                    suggestions=["Adicionar mais exemplos práticos"]
+                )
+            ]
 
     async def analyze_similar_content(self, topic: str, keywords: List[str]) -> Dict:
         """
         Analisa conteúdo similar existente
         """
+        logger.info(f"Analisando conteúdo similar para o tópico: {topic}")
         results = await self._search_vector_store(topic)
-        
+
         # Análise de gaps e oportunidades
         return {
             "similar_content": results,
@@ -1338,38 +1389,43 @@ class EnhancedSearchAgent:
         """
         Coleta insights de SEO
         """
+        logger.info(f"Coletando insights de SEO para as palavras-chave: {keywords}")
         # Implementar integração com APIs de SEO
-        return SEOInsight(
-            primary_keywords=[("python", 1000)],
-            related_keywords=[("python programming", 800)],
-            questions=["How to learn Python?"],
-            competing_content=[],
-            suggested_structure={
-                "introduction": ["key_point_1", "key_point_2"],
-                "main_sections": ["section_1", "section_2"],
-                "conclusion": ["summary", "next_steps"]
-            }
-        )
+        async with self.metrics.track_request("seo_insights"):
+            return SEOInsight(
+                primary_keywords=[("python", 1000)],
+                related_keywords=[("python programming", 800)],
+                questions=["How to learn Python?"],
+                competing_content=[],
+                suggested_structure={
+                    "introduction": ["key_point_1", "key_point_2"],
+                    "main_sections": ["section_1", "section_2"],
+                    "conclusion": ["summary", "next_steps"]
+                }
+            )
 
     async def analyze_audience_preferences(self, target_audience: str) -> AudienceInsight:
         """
         Analisa preferências da audiência
         """
-        return AudienceInsight(
-            preferences=["Clear explanations", "Code examples"],
-            pain_points=["Complex documentation", "Lack of examples"],
-            technical_level="intermediate",
-            common_questions=["How to start?", "Best practices?"],
-            preferred_formats=["Tutorials", "How-to guides"]
-        )
+        logger.info(f"Analisando preferências da audiência: {target_audience}")
+        async with self.metrics.track_request("audience_analysis"):
+            return AudienceInsight(
+                preferences=["Clear explanations", "Code examples"],
+                pain_points=["Complex documentation", "Lack of examples"],
+                technical_level="intermediate",
+                common_questions=["How to start?", "Best practices?"],
+                preferred_formats=["Tutorials", "How-to guides"]
+            )
 
     async def _search_vector_store(self, query: str) -> List[SearchResult]:
         """
         Realiza busca no armazenamento vetorial
         """
+        logger.info(f"Realizando busca no armazenamento vetorial com o termo: {query}")
         query_embedding = self.embeddings.embed_query(query)
         results = self.vector_store.similarity_search_with_score(query, k=5)
-        
+
         return [
             SearchResult(
                 content=result[0].page_content,
@@ -1380,29 +1436,57 @@ class EnhancedSearchAgent:
             for result in results
         ]
 
+    def _calculate_relevance(self, item: Dict, query: str) -> float:
+        """Calcula pontuação de relevância para um item"""
+        logger.debug(f"Calculando pontuação de relevância para o item: {item}")
+        score = 0.0
+
+        # Relevância do título
+        if query.lower() in item["title"].lower():
+            score += 0.4
+
+        # Relevância do texto/resumo
+        if query.lower() in (item.get("story_text") or "").lower() or \
+           query.lower() in (item.get("comment_text") or "").lower() or \
+           query.lower() in (item.get("description") or "").lower():
+            score += 0.3
+
+        # Relevância da pontuação
+        if item.get("points", 0) > 100:
+            score += 0.2
+        elif item.get("points", 0) > 50:
+            score += 0.1
+
+        # Relevância do número de comentários
+        if item.get("num_comments", 0) > 50:
+            score += 0.1
+
+        return min(score, 1.0)
+
     async def index_content(self, content: str, metadata: Dict[str, Any]):
         """
         Indexa novo conteúdo no armazenamento vetorial
         """
+        logger.info("Indexando novo conteúdo no armazenamento vetorial")
         chunks = self.text_splitter.split_text(content)
         chunk_metadatas = [metadata for _ in chunks]
         self.vector_store.add_texts(chunks, metadatas=chunk_metadatas)
 
-    def start_consuming(self):
+    async def start_consuming(self):
         """
         Inicia consumo de mensagens do RabbitMQ
         """
         def callback(ch, method, properties, body):
             message = json.loads(body)
-            print(f"Mensagem recebida: {message}")
-            
+            logger.info(f"Mensagem recebida: {message}")
+
             # Processar mensagem e enriquecer conteúdo
             enriched_data = asyncio.run(self.enrich_content_plan(
                 topic=message.get("topic", ""),
                 keywords=message.get("keywords", []),
                 target_audience=message.get("target_audience", "")
             ))
-            
+
             # Publicar resultados enriquecidos
             self.rabbitmq.publish_event(
                 "search.results",
@@ -1412,9 +1496,10 @@ class EnhancedSearchAgent:
         self.rabbitmq.consume_event("planning.generated", callback)
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
     agent = EnhancedSearchAgent()
-    print("Search Agent iniciado. Aguardando mensagens...")
-    agent.start_consuming()
+    logger.info("Search Agent iniciado. Aguardando mensagens...")
+    asyncio.run(agent.start_consuming())
 ```
 
 ## agents\search\config.py
@@ -1462,7 +1547,7 @@ class SearchAgentConfig(BaseSettings):
         },
         "hacker_news": {
             "name": "Hacker News",
-            "base_url": "https://hacker-news.firebaseio.com/v0/",
+            "base_url": "http://hn.algolia.com/api/v1",
             "priority": 2,
             "categories": ["technology", "programming"]
         },
@@ -1877,6 +1962,9 @@ from datetime import timedelta
 from pathlib import Path
 import os
 from dotenv import load_dotenv
+import logging
+
+logger = logging.getLogger(__name__)
 
 # Carregar variáveis de ambiente do .env
 env_path = Path('.') / '.env'
@@ -1886,10 +1974,17 @@ class NewsApiConfig(BaseSettings):
     """Configurações para integrações com APIs de notícias"""
     
     # Dev.to
-    DEVTO_API_KEY: Optional[str] = Field(None, env='NEWS_DEVTO_API_KEY')
-    DEVTO_MAX_RESULTS: int = Field(100, env='NEWS_DEVTO_MAX_RESULTS')
-    DEVTO_RATE_LIMIT: int = Field(3000, env='NEWS_DEVTO_RATE_LIMIT')
+    DEVTO_API_URL: str = Field("https://dev.to/api", env='DEVTO_API_URL')
+    DEVTO_API_KEY: Optional[str] = Field(None, env='DEVTO_API_KEY')
+    DEVTO_MAX_RESULTS: int = Field(100, env='DEVTO_MAX_RESULTS')
+    DEVTO_RATE_LIMIT: int = Field(3000, env='DEVTO_RATE_LIMIT')
     
+    # Hacker News
+    HACKER_NEWS_API_URL: str = Field("http://hn.algolia.com/api/v1", env='HACKER_NEWS_API_URL')
+    HACKER_NEWS_API_KEY: Optional[str] = Field(None, env='HACKER_NEWS_API_KEY')
+    HACKER_NEWS_MAX_RESULTS: int = Field(100, env='HACKER_NEWS_MAX_RESULTS')
+    HACKER_NEWS_RATE_LIMIT: int = Field(3000, env='HACKER_NEWS_RATE_LIMIT')
+
     # Cache
     CACHE_TTL: int = Field(3600, env='NEWS_CACHE_TTL')
     MAX_CACHE_ITEMS: int = Field(10000, env='NEWS_MAX_CACHE_ITEMS')
@@ -1911,7 +2006,7 @@ class NewsApiConfig(BaseSettings):
     
     # Configurações de fontes
     ENABLED_SOURCES: List[str] = Field(
-        default=["dev.to"],
+        default=["dev.to", "hacker_news"],
         env='NEWS_ENABLED_SOURCES'
     )
     
@@ -1924,6 +2019,11 @@ class NewsApiConfig(BaseSettings):
         case_sensitive = True
         env_file = ".env"
         env_file_encoding = 'utf-8'
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        logger.info("Configurações de API carregadas")
+        logger.debug(f"Configurações: {self.dict()}")
 ```
 
 ## agents\search\services\news\metrics.py
@@ -1934,14 +2034,15 @@ class NewsApiConfig(BaseSettings):
 from prometheus_client import Counter, Histogram, Gauge
 from prometheus_client.registry import CollectorRegistry
 import time
+import asyncio
 
 class NewsMetrics:
     """Sistema de métricas para o serviço de notícias"""
-    
+
     def __init__(self):
         # Criar registry separado para evitar colisões
         self.registry = CollectorRegistry()
-        
+
         # Contadores
         self.request_count = Counter(
             "news_integration_requests",
@@ -1949,14 +2050,14 @@ class NewsMetrics:
             ["source", "status"],
             registry=self.registry
         )
-        
+
         self.article_count = Counter(
             "news_integration_articles",
             "Total number of articles processed",
             ["source"],
             registry=self.registry
         )
-        
+
         # Histogramas
         self.request_latency = Histogram(
             "news_integration_request_duration",
@@ -1964,7 +2065,7 @@ class NewsMetrics:
             ["source"],
             registry=self.registry
         )
-        
+
         # Gauges
         self.active_requests = Gauge(
             "news_integration_active_requests",
@@ -1980,20 +2081,20 @@ class NewsMetrics:
                 self.metrics = metrics
                 self.source = source
                 self.start_time = None
-                
-            def __enter__(self):
+
+            async def __aenter__(self):
                 self.start_time = time.time()
                 self.metrics.active_requests.labels(source=self.source).inc()
                 return self
-                
-            def __exit__(self, exc_type, exc_val, exc_tb):
+
+            async def __aexit__(self, exc_type, exc_val, exc_tb):
                 duration = time.time() - self.start_time
                 self.metrics.request_latency.labels(source=self.source).observe(duration)
                 self.metrics.active_requests.labels(source=self.source).dec()
-                
+
                 status = "error" if exc_type else "success"
                 self.metrics.request_count.labels(source=self.source, status=status).inc()
-                
+
         return RequestTracker(self, source)
 
     def record_processed_article(self, source: str):
@@ -2078,6 +2179,8 @@ from .config import NewsApiConfig
 from .cache import NewsCache
 from .metrics import NewsMetrics
 from .clients.devto import DevToClient
+from .clients.hackernews import HackerNewsClient
+
 
 logger = logging.getLogger(__name__)
 
@@ -2099,6 +2202,7 @@ class NewsIntegrationService:
         
         # Inicializar clientes
         self.devto_client = DevToClient(api_key=self.config.DEVTO_API_KEY)
+        self.hacker_news_client = HackerNewsClient (api_key=self.config.HACKER_NEWS_API_KEY)
         
         self.session = None
 
@@ -2338,6 +2442,132 @@ class DevToClient:
         )
 ```
 
+## agents\search\services\news\clients\hackernews.py
+
+```python
+# class HackerNewsClient:
+  # agents/search/services/news/clients/devto.py
+
+from typing import List, Optional
+import aiohttp
+from datetime import datetime, timezone
+from pydantic import BaseModel, HttpUrl
+import logging
+from ...utils.rate_limiter import RateLimiter
+
+logger = logging.getLogger(__name__)
+
+class HackerNewsClientArticle(BaseModel):
+    """Modelo para artigos do Dev.to"""
+    id: int
+    title: str
+    description: Optional[str]
+    url: HttpUrl
+    published_at: datetime
+    tag_list: List[str]
+    user: dict
+    reading_time_minutes: Optional[int]
+    comments_count: Optional[int]
+    public_reactions_count: Optional[int]
+
+    class Config:
+        json_encoders = {
+            datetime: lambda v: v.isoformat()
+        }
+
+class HackerNewsClient:
+    """Cliente para a API do Hacker News"""
+    
+    def __init__(self, api_key: Optional[str] = None):
+        self.base_url = "http://hn.algolia.com/api/v1"
+        self.api_key = api_key
+        # Dev.to tem limite de 3000 requests/hora
+        self.rate_limiter = RateLimiter(max_calls=3000, period=3600)
+        
+    def _ensure_timezone(self, dt: datetime) -> datetime:
+        """Garante que a data tem timezone (UTC se não especificado)"""
+        if dt.tzinfo is None:
+            return dt.replace(tzinfo=timezone.utc)
+        return dt
+
+    async def get_articles(
+        self,
+        search_term: Optional[str] = None,
+        tag: Optional[str] = None,
+        username: Optional[str] = None,
+        page: int = 1,
+        per_page: int = 30
+    ) -> List[HackerNewsClientArticle]:
+        """Busca artigos no HackerNews"""
+        params = {
+            "page": page,
+            "per_page": min(per_page, 1000)
+        }
+        
+        if tag:
+            params["tag"] = tag
+        if username:
+            params["username"] = username
+            
+        headers = {}
+        if self.api_key:
+            headers["api-key"] = self.api_key
+        
+        try:
+            async with self.rate_limiter:
+                async with aiohttp.ClientSession() as session:
+                    if search_term:
+                        url = f"{self.base_url}/articles/search"
+                        params["q"] = search_term
+                    else:
+                        url = f"{self.base_url}/articles"
+                        
+                    async with session.get(url, params=params, headers=headers) as response:
+                        if response.status == 429:  # Too Many Requests
+                            retry_after = int(response.headers.get("Retry-After", 60))
+                            logger.warning(f"Rate limit hit. Retry after {retry_after} seconds")
+                            return []
+                            
+                        response.raise_for_status()
+                        data = await response.json()
+                        
+                        # Processar as datas antes de criar os objetos
+                        for article in data:
+                            if "published_at" in article:
+                                dt = datetime.fromisoformat(article["published_at"].replace("Z", "+00:00"))
+                                article["published_at"] = self._ensure_timezone(dt)
+                        
+                        return [HackerNewsClientArticle(**article) for article in data]
+        except aiohttp.ClientError as e:
+            logger.error(f"Error fetching from Dev.to: {str(e)}")
+            return []
+        except Exception as e:
+            logger.error(f"Unexpected error: {str(e)}")
+            return []
+    
+    def to_news_article(self, article: HackerNewsClientArticle) -> "NewsArticle":
+        """Converte DevToArticle para NewsArticle"""
+        from ..models import NewsArticle
+        
+        return NewsArticle(
+            title=article.title,
+            url=str(article.url),
+            source="Hacker News",
+            author=article.user.get("name"),
+            published_date=self._ensure_timezone(article.published_at),
+            summary=article.description or "",
+            content=None,
+            tags=article.tag_list,
+            metadata={
+                "reading_time": article.reading_time_minutes,
+                "comments_count": article.comments_count,
+                "reactions_count": article.public_reactions_count,
+                "author_username": article.user.get("username")
+            },
+            relevance_score=0.0
+        )
+```
+
 ## agents\search\services\news\clients\__init__.py
 
 ```python
@@ -2432,7 +2662,10 @@ class RateLimiter:
 ## build\lib\agents\__init__.py
 
 ```python
-from .search import *
+# agents/__init__.py
+from agents.search.services.news import NewsIntegrationService, NewsArticle, NewsSearchQuery
+
+__all__ = ['NewsIntegrationService', 'NewsArticle', 'NewsSearchQuery']
 ```
 
 ## build\lib\agents\action\__init__.py
@@ -3089,7 +3322,7 @@ class ReviewAgentConfig(BaseSettings):
 ```python
 from typing import Dict, List, Optional, Any
 from pydantic import BaseModel, Field
-from datetime import datetime
+from datetime import datetime, timedelta
 import asyncio
 import numpy as np
 from langchain.embeddings import HuggingFaceEmbeddings
@@ -3098,14 +3331,27 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 from core.rabbitmq_utils import RabbitMQUtils
 from core.config import get_settings
 import json
+import time
+from .services.news.metrics import NewsMetrics
+import aiohttp
+from .services.news.clients.hackernews import HackerNewsClient
+from .services.news.clients.devto import DevToClient
+from .services.news.config import NewsApiConfig
+import logging
+
+logger = logging.getLogger(__name__)
 
 class SearchResult(BaseModel):
     """Modelo para resultados de busca"""
-    content: str
+    title: str
+    url: str
+    author: str
     source: str
-    relevance_score: float
+    published_date: datetime
+    summary: str
+    tags: List[str]
     metadata: Dict[str, Any] = Field(default_factory=dict)
-    timestamp: datetime = Field(default_factory=datetime.now)
+    relevance_score: float
 
 class ContentValidation(BaseModel):
     """Modelo para validação de conteúdo"""
@@ -3146,9 +3392,33 @@ class EnhancedSearchAgent:
         )
         self.setup_vector_store()
         self.setup_cache()
+        self.metrics = NewsMetrics()
+        self.news_config = NewsApiConfig()
+        self.hacker_news_client = HackerNewsClient(self.news_config.HACKER_NEWS_API_URL, self.news_config.HACKER_NEWS_API_KEY)
+        self.dev_to_client = DevToClient(self.news_config.DEVTO_API_URL, self.news_config.DEVTO_API_KEY)
+        self.session = None
+
+    async def initialize(self):
+        """Inicializa o agente de pesquisa"""
+        logger.info("Inicializando o agente de pesquisa")
+        await self.hacker_news_client.initialize()
+        await self.dev_to_client.initialize()
+        if not self.session:
+            logger.info("Inicializando sessão HTTP para o agente de pesquisa")
+            self.session = aiohttp.ClientSession()
+
+    async def close(self):
+        """Fecha conexões do agente de pesquisa"""
+        logger.info("Fechando conexões do agente de pesquisa")
+        await self.hacker_news_client.close()
+        await self.dev_to_client.close()
+        if self.session:
+            await self.session.close()
+            self.session = None
 
     def setup_vector_store(self):
         """Configura armazenamento vetorial"""
+        logger.info("Configurando armazenamento vetorial")
         self.vector_store = FAISS.from_texts(
             texts=["inicialização do índice"],
             embedding=self.embeddings,
@@ -3157,6 +3427,7 @@ class EnhancedSearchAgent:
 
     def setup_cache(self):
         """Configura sistema de cache"""
+        logger.info("Configurando sistema de cache")
         self.cache = {}
         self.cache_ttl = 3600  # 1 hora
 
@@ -3164,6 +3435,7 @@ class EnhancedSearchAgent:
         """
         Enriquece o plano de conteúdo com pesquisas e análises
         """
+        logger.info(f"Enriquecendo plano de conteúdo para o tópico: {topic}")
         tasks = [
             self.search_recent_developments(topic),
             self.validate_technical_aspects(topic),
@@ -3171,9 +3443,9 @@ class EnhancedSearchAgent:
             self.gather_seo_insights(keywords),
             self.analyze_audience_preferences(target_audience)
         ]
-        
+
         results = await asyncio.gather(*tasks)
-        
+
         return {
             "recent_developments": results[0],
             "technical_validations": results[1],
@@ -3186,38 +3458,46 @@ class EnhancedSearchAgent:
         """
         Busca desenvolvimentos recentes sobre o tópico
         """
-        # Implementar integração com APIs de notícias/blogs técnicos
-        # Por enquanto, retorna exemplo
-        return [
-            SearchResult(
-                content=f"Último desenvolvimento sobre {topic}",
-                source="tech_news",
-                relevance_score=0.95,
-                metadata={"date": datetime.now().isoformat()}
-            )
-        ]
+        logger.info(f"Buscando desenvolvimentos recentes sobre o tópico: {topic}")
+        # Integração com a API do Hacker News
+        async with self.metrics.track_request("hacker_news"):
+            logger.info("Buscando artigos no Hacker News")
+            hacker_news_results = await self.hacker_news_client.search_stories(topic)
+            logger.debug(f"Resultados do Hacker News: {hacker_news_results}")
+
+        # Integração com a API do Dev.to
+        async with self.metrics.track_request("dev_to"):
+            logger.info("Buscando artigos no Dev.to")
+            dev_to_results = await self.dev_to_client.search_articles(topic)
+            logger.debug(f"Resultados do Dev.to: {dev_to_results}")
+
+        # Combinar resultados de todas as fontes
+        return hacker_news_results + dev_to_results
 
     async def validate_technical_aspects(self, topic: str) -> List[ContentValidation]:
         """
         Valida aspectos técnicos do tópico
         """
+        logger.info(f"Validando aspectos técnicos do tópico: {topic}")
         # Implementar validação contra fontes técnicas confiáveis
-        return [
-            ContentValidation(
-                claim=f"Validação técnica para {topic}",
-                is_valid=True,
-                confidence_score=0.85,
-                supporting_sources=["docs.python.org"],
-                suggestions=["Adicionar mais exemplos práticos"]
-            )
-        ]
+        async with self.metrics.track_request("technical_validation"):
+            return [
+                ContentValidation(
+                    claim=f"Validação técnica para {topic}",
+                    is_valid=True,
+                    confidence_score=0.85,
+                    supporting_sources=["docs.python.org"],
+                    suggestions=["Adicionar mais exemplos práticos"]
+                )
+            ]
 
     async def analyze_similar_content(self, topic: str, keywords: List[str]) -> Dict:
         """
         Analisa conteúdo similar existente
         """
+        logger.info(f"Analisando conteúdo similar para o tópico: {topic}")
         results = await self._search_vector_store(topic)
-        
+
         # Análise de gaps e oportunidades
         return {
             "similar_content": results,
@@ -3229,38 +3509,43 @@ class EnhancedSearchAgent:
         """
         Coleta insights de SEO
         """
+        logger.info(f"Coletando insights de SEO para as palavras-chave: {keywords}")
         # Implementar integração com APIs de SEO
-        return SEOInsight(
-            primary_keywords=[("python", 1000)],
-            related_keywords=[("python programming", 800)],
-            questions=["How to learn Python?"],
-            competing_content=[],
-            suggested_structure={
-                "introduction": ["key_point_1", "key_point_2"],
-                "main_sections": ["section_1", "section_2"],
-                "conclusion": ["summary", "next_steps"]
-            }
-        )
+        async with self.metrics.track_request("seo_insights"):
+            return SEOInsight(
+                primary_keywords=[("python", 1000)],
+                related_keywords=[("python programming", 800)],
+                questions=["How to learn Python?"],
+                competing_content=[],
+                suggested_structure={
+                    "introduction": ["key_point_1", "key_point_2"],
+                    "main_sections": ["section_1", "section_2"],
+                    "conclusion": ["summary", "next_steps"]
+                }
+            )
 
     async def analyze_audience_preferences(self, target_audience: str) -> AudienceInsight:
         """
         Analisa preferências da audiência
         """
-        return AudienceInsight(
-            preferences=["Clear explanations", "Code examples"],
-            pain_points=["Complex documentation", "Lack of examples"],
-            technical_level="intermediate",
-            common_questions=["How to start?", "Best practices?"],
-            preferred_formats=["Tutorials", "How-to guides"]
-        )
+        logger.info(f"Analisando preferências da audiência: {target_audience}")
+        async with self.metrics.track_request("audience_analysis"):
+            return AudienceInsight(
+                preferences=["Clear explanations", "Code examples"],
+                pain_points=["Complex documentation", "Lack of examples"],
+                technical_level="intermediate",
+                common_questions=["How to start?", "Best practices?"],
+                preferred_formats=["Tutorials", "How-to guides"]
+            )
 
     async def _search_vector_store(self, query: str) -> List[SearchResult]:
         """
         Realiza busca no armazenamento vetorial
         """
+        logger.info(f"Realizando busca no armazenamento vetorial com o termo: {query}")
         query_embedding = self.embeddings.embed_query(query)
         results = self.vector_store.similarity_search_with_score(query, k=5)
-        
+
         return [
             SearchResult(
                 content=result[0].page_content,
@@ -3271,29 +3556,57 @@ class EnhancedSearchAgent:
             for result in results
         ]
 
+    def _calculate_relevance(self, item: Dict, query: str) -> float:
+        """Calcula pontuação de relevância para um item"""
+        logger.debug(f"Calculando pontuação de relevância para o item: {item}")
+        score = 0.0
+
+        # Relevância do título
+        if query.lower() in item["title"].lower():
+            score += 0.4
+
+        # Relevância do texto/resumo
+        if query.lower() in (item.get("story_text") or "").lower() or \
+           query.lower() in (item.get("comment_text") or "").lower() or \
+           query.lower() in (item.get("description") or "").lower():
+            score += 0.3
+
+        # Relevância da pontuação
+        if item.get("points", 0) > 100:
+            score += 0.2
+        elif item.get("points", 0) > 50:
+            score += 0.1
+
+        # Relevância do número de comentários
+        if item.get("num_comments", 0) > 50:
+            score += 0.1
+
+        return min(score, 1.0)
+
     async def index_content(self, content: str, metadata: Dict[str, Any]):
         """
         Indexa novo conteúdo no armazenamento vetorial
         """
+        logger.info("Indexando novo conteúdo no armazenamento vetorial")
         chunks = self.text_splitter.split_text(content)
         chunk_metadatas = [metadata for _ in chunks]
         self.vector_store.add_texts(chunks, metadatas=chunk_metadatas)
 
-    def start_consuming(self):
+    async def start_consuming(self):
         """
         Inicia consumo de mensagens do RabbitMQ
         """
         def callback(ch, method, properties, body):
             message = json.loads(body)
-            print(f"Mensagem recebida: {message}")
-            
+            logger.info(f"Mensagem recebida: {message}")
+
             # Processar mensagem e enriquecer conteúdo
             enriched_data = asyncio.run(self.enrich_content_plan(
                 topic=message.get("topic", ""),
                 keywords=message.get("keywords", []),
                 target_audience=message.get("target_audience", "")
             ))
-            
+
             # Publicar resultados enriquecidos
             self.rabbitmq.publish_event(
                 "search.results",
@@ -3303,9 +3616,10 @@ class EnhancedSearchAgent:
         self.rabbitmq.consume_event("planning.generated", callback)
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
     agent = EnhancedSearchAgent()
-    print("Search Agent iniciado. Aguardando mensagens...")
-    agent.start_consuming()
+    logger.info("Search Agent iniciado. Aguardando mensagens...")
+    asyncio.run(agent.start_consuming())
 ```
 
 ## build\lib\agents\search\config.py
@@ -3353,7 +3667,7 @@ class SearchAgentConfig(BaseSettings):
         },
         "hacker_news": {
             "name": "Hacker News",
-            "base_url": "https://hacker-news.firebaseio.com/v0/",
+            "base_url": "http://hn.algolia.com/api/v1",
             "priority": 2,
             "categories": ["technology", "programming"]
         },
@@ -3450,7 +3764,9 @@ config = SearchAgentConfig()
 
 ```python
 # agents/search/__init__.py
-from .services import *
+from agents.search.services.news import NewsIntegrationService, NewsArticle, NewsSearchQuery
+
+__all__ = ['NewsIntegrationService', 'NewsArticle', 'NewsSearchQuery']
 ```
 
 ## build\lib\agents\search\services\news_integration.py
@@ -3649,18 +3965,10 @@ class NewsIntegrationService:
 ## build\lib\agents\search\services\__init__.py
 
 ```python
-# agents/search/services/news/__init__.py
+# agents/search/services/__init__.py
+from agents.search.services.news import NewsIntegrationService, NewsArticle, NewsSearchQuery
 
-from .service import NewsIntegrationService
-from .models import NewsArticle, NewsSearchQuery
-from .config import NewsApiConfig
-
-__all__ = [
-    'NewsIntegrationService',
-    'NewsArticle',
-    'NewsSearchQuery',
-    'NewsApiConfig'
-]
+__all__ = ['NewsIntegrationService', 'NewsArticle', 'NewsSearchQuery']
 ```
 
 ## build\lib\agents\search\services\news\cache.py
@@ -3774,6 +4082,9 @@ from datetime import timedelta
 from pathlib import Path
 import os
 from dotenv import load_dotenv
+import logging
+
+logger = logging.getLogger(__name__)
 
 # Carregar variáveis de ambiente do .env
 env_path = Path('.') / '.env'
@@ -3783,10 +4094,17 @@ class NewsApiConfig(BaseSettings):
     """Configurações para integrações com APIs de notícias"""
     
     # Dev.to
-    DEVTO_API_KEY: Optional[str] = Field(None, env='NEWS_DEVTO_API_KEY')
-    DEVTO_MAX_RESULTS: int = Field(100, env='NEWS_DEVTO_MAX_RESULTS')
-    DEVTO_RATE_LIMIT: int = Field(3000, env='NEWS_DEVTO_RATE_LIMIT')
+    DEVTO_API_URL: str = Field("https://dev.to/api", env='DEVTO_API_URL')
+    DEVTO_API_KEY: Optional[str] = Field(None, env='DEVTO_API_KEY')
+    DEVTO_MAX_RESULTS: int = Field(100, env='DEVTO_MAX_RESULTS')
+    DEVTO_RATE_LIMIT: int = Field(3000, env='DEVTO_RATE_LIMIT')
     
+    # Hacker News
+    HACKER_NEWS_API_URL: str = Field("http://hn.algolia.com/api/v1", env='HACKER_NEWS_API_URL')
+    HACKER_NEWS_API_KEY: Optional[str] = Field(None, env='HACKER_NEWS_API_KEY')
+    HACKER_NEWS_MAX_RESULTS: int = Field(100, env='HACKER_NEWS_MAX_RESULTS')
+    HACKER_NEWS_RATE_LIMIT: int = Field(3000, env='HACKER_NEWS_RATE_LIMIT')
+
     # Cache
     CACHE_TTL: int = Field(3600, env='NEWS_CACHE_TTL')
     MAX_CACHE_ITEMS: int = Field(10000, env='NEWS_MAX_CACHE_ITEMS')
@@ -3808,7 +4126,7 @@ class NewsApiConfig(BaseSettings):
     
     # Configurações de fontes
     ENABLED_SOURCES: List[str] = Field(
-        default=["dev.to"],
+        default=["dev.to", "hacker_news"],
         env='NEWS_ENABLED_SOURCES'
     )
     
@@ -3821,6 +4139,11 @@ class NewsApiConfig(BaseSettings):
         case_sensitive = True
         env_file = ".env"
         env_file_encoding = 'utf-8'
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        logger.info("Configurações de API carregadas")
+        logger.debug(f"Configurações: {self.dict()}")
 ```
 
 ## build\lib\agents\search\services\news\metrics.py
@@ -3831,14 +4154,15 @@ class NewsApiConfig(BaseSettings):
 from prometheus_client import Counter, Histogram, Gauge
 from prometheus_client.registry import CollectorRegistry
 import time
+import asyncio
 
 class NewsMetrics:
     """Sistema de métricas para o serviço de notícias"""
-    
+
     def __init__(self):
         # Criar registry separado para evitar colisões
         self.registry = CollectorRegistry()
-        
+
         # Contadores
         self.request_count = Counter(
             "news_integration_requests",
@@ -3846,14 +4170,14 @@ class NewsMetrics:
             ["source", "status"],
             registry=self.registry
         )
-        
+
         self.article_count = Counter(
             "news_integration_articles",
             "Total number of articles processed",
             ["source"],
             registry=self.registry
         )
-        
+
         # Histogramas
         self.request_latency = Histogram(
             "news_integration_request_duration",
@@ -3861,7 +4185,7 @@ class NewsMetrics:
             ["source"],
             registry=self.registry
         )
-        
+
         # Gauges
         self.active_requests = Gauge(
             "news_integration_active_requests",
@@ -3877,20 +4201,20 @@ class NewsMetrics:
                 self.metrics = metrics
                 self.source = source
                 self.start_time = None
-                
-            def __enter__(self):
+
+            async def __aenter__(self):
                 self.start_time = time.time()
                 self.metrics.active_requests.labels(source=self.source).inc()
                 return self
-                
-            def __exit__(self, exc_type, exc_val, exc_tb):
+
+            async def __aexit__(self, exc_type, exc_val, exc_tb):
                 duration = time.time() - self.start_time
                 self.metrics.request_latency.labels(source=self.source).observe(duration)
                 self.metrics.active_requests.labels(source=self.source).dec()
-                
+
                 status = "error" if exc_type else "success"
                 self.metrics.request_count.labels(source=self.source, status=status).inc()
-                
+
         return RequestTracker(self, source)
 
     def record_processed_article(self, source: str):
@@ -3966,17 +4290,27 @@ class NewsArticle(BaseModel):
 # agents/search/services/news/service.py
 
 import asyncio
-import aiohttp  # Adicionado import do aiohttp
+import aiohttp
 from typing import List, Dict, Any, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 import logging
 from .models import NewsArticle, NewsSearchQuery
 from .config import NewsApiConfig
 from .cache import NewsCache
 from .metrics import NewsMetrics
 from .clients.devto import DevToClient
+from .clients.hackernews import HackerNewsClient
+
 
 logger = logging.getLogger(__name__)
+
+def ensure_timezone(dt: Optional[datetime]) -> Optional[datetime]:
+    """Garante que a data tem timezone (UTC se não especificado)"""
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
 
 class NewsIntegrationService:
     """Serviço principal de integração de notícias"""
@@ -3988,6 +4322,7 @@ class NewsIntegrationService:
         
         # Inicializar clientes
         self.devto_client = DevToClient(api_key=self.config.DEVTO_API_KEY)
+        self.hacker_news_client = HackerNewsClient (api_key=self.config.HACKER_NEWS_API_KEY)
         
         self.session = None
 
@@ -4007,6 +4342,10 @@ class NewsIntegrationService:
     async def search_news(self, query: NewsSearchQuery) -> List[NewsArticle]:
         """Busca notícias com base nos parâmetros fornecidos"""
         try:
+            # Garantir que as datas têm timezone
+            query.start_date = ensure_timezone(query.start_date)
+            query.end_date = ensure_timezone(query.end_date)
+
             # Verificar cache
             cache_key = str(query.dict())
             cached_results = self.cache.get(cache_key)
@@ -4018,7 +4357,7 @@ class NewsIntegrationService:
             results = []
             
             # Busca no Dev.to
-            with self.metrics.track_request("dev.to"):
+            async with self.metrics.track_request("dev.to"):
                 devto_articles = await self.devto_client.get_articles(
                     search_term=query.topic,
                     tag=query.keywords[0] if query.keywords else None
@@ -4043,6 +4382,9 @@ class NewsIntegrationService:
         """Filtra e ordena os resultados"""
         filtered = []
         for article in articles:
+            # Garantir que a data do artigo tem timezone
+            article.published_date = ensure_timezone(article.published_date)
+            
             # Filtrar por data
             if query.start_date and article.published_date < query.start_date:
                 continue
@@ -4068,7 +4410,7 @@ class NewsIntegrationService:
             score += 0.4
         
         # Relevância das tags
-        if any(keyword.lower() in tag.lower() for keyword in query.keywords for tag in article.tags):
+        if article.tags and any(keyword.lower() in tag.lower() for keyword in query.keywords for tag in article.tags):
             score += 0.3
         
         # Relevância do resumo
@@ -4083,38 +4425,16 @@ class NewsIntegrationService:
                 score += 0.1
         
         return min(score, 1.0)
-
-    async def get_article_content(self, article: NewsArticle) -> Optional[str]:
-        """Busca o conteúdo completo de um artigo se necessário"""
-        if article.content:
-            return article.content
-
-        try:
-            if article.source == "dev.to":
-                # Implementar busca de conteúdo completo
-                pass
-                
-            return None
-        except Exception as e:
-            logger.error(f"Error fetching article content: {str(e)}")
-            return None
 ```
 
 ## build\lib\agents\search\services\news\__init__.py
 
 ```python
 # agents/search/services/news/__init__.py
-
 from .service import NewsIntegrationService
 from .models import NewsArticle, NewsSearchQuery
-from .config import NewsApiConfig
 
-__all__ = [
-    'NewsIntegrationService',
-    'NewsArticle',
-    'NewsSearchQuery',
-    'NewsApiConfig'
-]
+__all__ = ['NewsIntegrationService', 'NewsArticle', 'NewsSearchQuery']
 ```
 
 ## build\lib\agents\search\services\news\clients\devto.py
@@ -4122,13 +4442,11 @@ __all__ = [
 ```python
 # agents/search/services/news/clients/devto.py
 
-from typing import List, Optional, Dict, Any
+from typing import List, Optional
 import aiohttp
-from datetime import datetime
+from datetime import datetime, timezone
 from pydantic import BaseModel, HttpUrl
 import logging
-from ..models import NewsArticle
-from ..config import NewsApiConfig
 from ...utils.rate_limiter import RateLimiter
 
 logger = logging.getLogger(__name__)
@@ -4141,10 +4459,15 @@ class DevToArticle(BaseModel):
     url: HttpUrl
     published_at: datetime
     tag_list: List[str]
-    user: Dict[str, Any]  # Informações do autor
+    user: dict
     reading_time_minutes: Optional[int]
     comments_count: Optional[int]
     public_reactions_count: Optional[int]
+
+    class Config:
+        json_encoders = {
+            datetime: lambda v: v.isoformat()
+        }
 
 class DevToClient:
     """Cliente para a API do Dev.to"""
@@ -4155,34 +4478,31 @@ class DevToClient:
         # Dev.to tem limite de 3000 requests/hora
         self.rate_limiter = RateLimiter(max_calls=3000, period=3600)
         
+    def _ensure_timezone(self, dt: datetime) -> datetime:
+        """Garante que a data tem timezone (UTC se não especificado)"""
+        if dt.tzinfo is None:
+            return dt.replace(tzinfo=timezone.utc)
+        return dt
+
     async def get_articles(
         self,
+        search_term: Optional[str] = None,
         tag: Optional[str] = None,
         username: Optional[str] = None,
-        search_term: Optional[str] = None,
         page: int = 1,
         per_page: int = 30
     ) -> List[DevToArticle]:
-        """
-        Busca artigos no Dev.to
-        
-        Args:
-            tag: Filtrar por tag
-            username: Filtrar por autor
-            search_term: Termo de busca
-            page: Número da página
-            per_page: Artigos por página (max 1000)
-        """
+        """Busca artigos no Dev.to"""
         params = {
             "page": page,
-            "per_page": min(per_page, 1000)  # Dev.to limita a 1000
+            "per_page": min(per_page, 1000)
         }
         
         if tag:
             params["tag"] = tag
         if username:
             params["username"] = username
-        
+            
         headers = {}
         if self.api_key:
             headers["api-key"] = self.api_key
@@ -4195,7 +4515,7 @@ class DevToClient:
                         params["q"] = search_term
                     else:
                         url = f"{self.base_url}/articles"
-                    
+                        
                     async with session.get(url, params=params, headers=headers) as response:
                         if response.status == 429:  # Too Many Requests
                             retry_after = int(response.headers.get("Retry-After", 60))
@@ -4205,8 +4525,13 @@ class DevToClient:
                         response.raise_for_status()
                         data = await response.json()
                         
-                        return [DevToArticle.parse_obj(article) for article in data]
+                        # Processar as datas antes de criar os objetos
+                        for article in data:
+                            if "published_at" in article:
+                                dt = datetime.fromisoformat(article["published_at"].replace("Z", "+00:00"))
+                                article["published_at"] = self._ensure_timezone(dt)
                         
+                        return [DevToArticle(**article) for article in data]
         except aiohttp.ClientError as e:
             logger.error(f"Error fetching from Dev.to: {str(e)}")
             return []
@@ -4214,32 +4539,153 @@ class DevToClient:
             logger.error(f"Unexpected error: {str(e)}")
             return []
     
-    def to_news_article(self, article: DevToArticle) -> NewsArticle:
+    def to_news_article(self, article: DevToArticle) -> "NewsArticle":
         """Converte DevToArticle para NewsArticle"""
+        from ..models import NewsArticle
+        
         return NewsArticle(
             title=article.title,
             url=str(article.url),
             source="dev.to",
             author=article.user.get("name"),
-            published_date=article.published_at,
+            published_date=self._ensure_timezone(article.published_at),
             summary=article.description or "",
-            content=None,  # Conteúdo completo seria buscado separadamente
-            category="technology",
+            content=None,
             tags=article.tag_list,
             metadata={
                 "reading_time": article.reading_time_minutes,
                 "comments_count": article.comments_count,
                 "reactions_count": article.public_reactions_count,
                 "author_username": article.user.get("username")
-            }
+            },
+            relevance_score=0.0
         )
+```
 
-# Exemplo de uso:
-async def example_usage():
-    client = DevToClient()
-    articles = await client.get_articles(search_term="python", tag="programming")
-    news_articles = [client.to_news_article(article) for article in articles]
-    return news_articles
+## build\lib\agents\search\services\news\clients\hackernews.py
+
+```python
+# class HackerNewsClient:
+  # agents/search/services/news/clients/devto.py
+
+from typing import List, Optional
+import aiohttp
+from datetime import datetime, timezone
+from pydantic import BaseModel, HttpUrl
+import logging
+from ...utils.rate_limiter import RateLimiter
+
+logger = logging.getLogger(__name__)
+
+class HackerNewsClientArticle(BaseModel):
+    """Modelo para artigos do Dev.to"""
+    id: int
+    title: str
+    description: Optional[str]
+    url: HttpUrl
+    published_at: datetime
+    tag_list: List[str]
+    user: dict
+    reading_time_minutes: Optional[int]
+    comments_count: Optional[int]
+    public_reactions_count: Optional[int]
+
+    class Config:
+        json_encoders = {
+            datetime: lambda v: v.isoformat()
+        }
+
+class HackerNewsClient:
+    """Cliente para a API do Hacker News"""
+    
+    def __init__(self, api_key: Optional[str] = None):
+        self.base_url = "http://hn.algolia.com/api/v1"
+        self.api_key = api_key
+        # Dev.to tem limite de 3000 requests/hora
+        self.rate_limiter = RateLimiter(max_calls=3000, period=3600)
+        
+    def _ensure_timezone(self, dt: datetime) -> datetime:
+        """Garante que a data tem timezone (UTC se não especificado)"""
+        if dt.tzinfo is None:
+            return dt.replace(tzinfo=timezone.utc)
+        return dt
+
+    async def get_articles(
+        self,
+        search_term: Optional[str] = None,
+        tag: Optional[str] = None,
+        username: Optional[str] = None,
+        page: int = 1,
+        per_page: int = 30
+    ) -> List[HackerNewsClientArticle]:
+        """Busca artigos no HackerNews"""
+        params = {
+            "page": page,
+            "per_page": min(per_page, 1000)
+        }
+        
+        if tag:
+            params["tag"] = tag
+        if username:
+            params["username"] = username
+            
+        headers = {}
+        if self.api_key:
+            headers["api-key"] = self.api_key
+        
+        try:
+            async with self.rate_limiter:
+                async with aiohttp.ClientSession() as session:
+                    if search_term:
+                        url = f"{self.base_url}/articles/search"
+                        params["q"] = search_term
+                    else:
+                        url = f"{self.base_url}/articles"
+                        
+                    async with session.get(url, params=params, headers=headers) as response:
+                        if response.status == 429:  # Too Many Requests
+                            retry_after = int(response.headers.get("Retry-After", 60))
+                            logger.warning(f"Rate limit hit. Retry after {retry_after} seconds")
+                            return []
+                            
+                        response.raise_for_status()
+                        data = await response.json()
+                        
+                        # Processar as datas antes de criar os objetos
+                        for article in data:
+                            if "published_at" in article:
+                                dt = datetime.fromisoformat(article["published_at"].replace("Z", "+00:00"))
+                                article["published_at"] = self._ensure_timezone(dt)
+                        
+                        return [HackerNewsClientArticle(**article) for article in data]
+        except aiohttp.ClientError as e:
+            logger.error(f"Error fetching from Dev.to: {str(e)}")
+            return []
+        except Exception as e:
+            logger.error(f"Unexpected error: {str(e)}")
+            return []
+    
+    def to_news_article(self, article: HackerNewsClientArticle) -> "NewsArticle":
+        """Converte DevToArticle para NewsArticle"""
+        from ..models import NewsArticle
+        
+        return NewsArticle(
+            title=article.title,
+            url=str(article.url),
+            source="Hacker News",
+            author=article.user.get("name"),
+            published_date=self._ensure_timezone(article.published_at),
+            summary=article.description or "",
+            content=None,
+            tags=article.tag_list,
+            metadata={
+                "reading_time": article.reading_time_minutes,
+                "comments_count": article.comments_count,
+                "reactions_count": article.public_reactions_count,
+                "author_username": article.user.get("username")
+            },
+            relevance_score=0.0
+        )
 ```
 
 ## build\lib\agents\search\services\news\clients\__init__.py
