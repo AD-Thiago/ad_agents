@@ -3,18 +3,23 @@
 import asyncio
 import aiohttp
 from typing import List, Dict, Any, Optional
-from datetime import datetime, timedelta
+from datetime import datetime, timezone
 import logging
-from bs4 import BeautifulSoup
-import nltk
-from nltk.tokenize import sent_tokenize
 from .models import NewsArticle, NewsSearchQuery
 from .config import NewsApiConfig
 from .cache import NewsCache
 from .metrics import NewsMetrics
+from .clients.devto import DevToClient
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+def ensure_timezone(dt: Optional[datetime]) -> Optional[datetime]:
+    """Garante que a data tem timezone (UTC se não especificado)"""
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
 
 class NewsIntegrationService:
     """Serviço principal de integração de notícias"""
@@ -23,19 +28,17 @@ class NewsIntegrationService:
         self.config = NewsApiConfig()
         self.cache = NewsCache(self.config)
         self.metrics = NewsMetrics()
+        
+        # Inicializar clientes
+        self.devto_client = DevToClient(api_key=self.config.DEVTO_API_KEY)
+        
         self.session = None
-
-        # Download NLTK data se necessário
-        try:
-            nltk.data.find('tokenizers/punkt')
-        except LookupError:
-            nltk.download('punkt')
 
     async def initialize(self):
         """Inicializa o serviço"""
+        logger.info("Initializing News Integration Service")
         if not self.session:
             self.session = aiohttp.ClientSession()
-        logger.info("News Integration Service initialized")
 
     async def close(self):
         """Fecha conexões"""
@@ -45,30 +48,36 @@ class NewsIntegrationService:
         logger.info("News Integration Service shut down")
 
     async def search_news(self, query: NewsSearchQuery) -> List[NewsArticle]:
-        """
-        Busca notícias baseado nos parâmetros fornecidos
-        """
+        """Busca notícias com base nos parâmetros fornecidos"""
         try:
-            # Verifica cache
+            # Garantir que as datas têm timezone
+            query.start_date = ensure_timezone(query.start_date)
+            query.end_date = ensure_timezone(query.end_date)
+
+            # Verificar cache
             cache_key = str(query.dict())
             cached_results = self.cache.get(cache_key)
             if cached_results:
                 logger.info(f"Cache hit for query: {query.topic}")
                 return cached_results
 
-            # Busca em todas as fontes configuradas
+            # Buscar em todas as fontes configuradas
             results = []
-            for source_id, config in self.config.NEWS_SOURCES.items():
-                try:
-                    source_results = await self._search_source(source_id, query)
-                    results.extend(source_results)
-                except Exception as e:
-                    logger.error(f"Error searching source {source_id}: {str(e)}")
+            
+            # Busca no Dev.to
+            async with self.metrics.track_request("dev.to"):
+                devto_articles = await self.devto_client.get_articles(
+                    search_term=query.topic,
+                    tag=query.keywords[0] if query.keywords else None
+                )
+                for article in devto_articles:
+                    results.append(self.devto_client.to_news_article(article))
+                    self.metrics.record_processed_article("dev.to")
 
-            # Filtra e ordena resultados
+            # Filtrar e ordenar resultados
             filtered_results = self._filter_and_sort_results(results, query)
 
-            # Armazena no cache
+            # Armazenar no cache
             self.cache.set(cache_key, filtered_results)
 
             return filtered_results
@@ -77,100 +86,50 @@ class NewsIntegrationService:
             logger.error(f"Error in search_news: {str(e)}")
             return []
 
-    async def _search_source(self, source_id: str, query: NewsSearchQuery) -> List[NewsArticle]:
-        """Busca notícias em uma fonte específica"""
-        source_config = self.config.NEWS_SOURCES.get(source_id)
-        if not source_config:
-            return []
-
-        try:
-            async with self.session.get(
-                f"{source_config['base_url']}search",
-                params={
-                    "q": query.topic,
-                    "from": query.start_date.isoformat() if query.start_date else None,
-                    "to": query.end_date.isoformat() if query.end_date else None,
-                }
-            ) as response:
-                data = await response.json()
-                return [
-                    await self._process_article(article, source_id)
-                    for article in data.get("articles", [])
-                ]
-        except Exception as e:
-            logger.error(f"Error fetching from {source_id}: {str(e)}")
-            return []
-
-    async def _process_article(self, raw_article: Dict, source_id: str) -> NewsArticle:
-        """Processa um artigo de notícia"""
-        try:
-            content = await self._fetch_article_content(raw_article.get("url", ""))
-            return NewsArticle(
-                title=raw_article.get("title", ""),
-                url=raw_article.get("url", ""),
-                source=source_id,
-                author=raw_article.get("author"),
-                published_date=datetime.fromisoformat(raw_article["published_at"]),
-                summary=self._generate_summary(content) if content else raw_article.get("summary", ""),
-                content=content,
-                category=raw_article.get("category", "technology"),
-                tags=raw_article.get("tags", [])
-            )
-        except Exception as e:
-            logger.error(f"Error processing article: {str(e)}")
-            raise
-
     def _filter_and_sort_results(self, articles: List[NewsArticle], query: NewsSearchQuery) -> List[NewsArticle]:
         """Filtra e ordena os resultados"""
         filtered = []
         for article in articles:
+            # Garantir que a data do artigo tem timezone
+            article.published_date = ensure_timezone(article.published_date)
+            
+            # Filtrar por data
             if query.start_date and article.published_date < query.start_date:
                 continue
             if query.end_date and article.published_date > query.end_date:
                 continue
-            filtered.append(article)
 
-        # Ordena por data de publicação (mais recente primeiro)
-        return sorted(filtered, key=lambda x: x.published_date, reverse=True)
+            # Filtrar por relevância
+            if self._calculate_relevance(article, query) >= query.min_relevance:
+                filtered.append(article)
 
-    async def _fetch_article_content(self, url: str) -> Optional[str]:
-        """Busca e extrai conteúdo de um artigo"""
-        if not url:
-            return None
+        # Ordenar por data de publicação (mais recente primeiro)
+        filtered.sort(key=lambda x: x.published_date, reverse=True)
 
-        try:
-            async with self.session.get(url) as response:
-                html = await response.text()
-                soup = BeautifulSoup(html, 'html.parser')
-                
-                # Remove elementos indesejados
-                for element in soup.find_all(['script', 'style', 'nav', 'header', 'footer']):
-                    element.decompose()
-                
-                # Encontra o conteúdo principal
-                article = soup.find('article') or soup.find(class_=['post-content', 'article-content'])
-                if article:
-                    return article.get_text(strip=True)
-                return None
-        except Exception as e:
-            logger.error(f"Error fetching article content: {str(e)}")
-            return None
+        # Limitar número de resultados
+        return filtered[:query.max_results] if query.max_results else filtered
 
-    def _generate_summary(self, content: str) -> str:
-        """Gera um resumo do conteúdo"""
-        if not content:
-            return ""
-            
-        sentences = sent_tokenize(content)
-        if len(sentences) <= 3:
-            return content
-            
-        # Usa as primeiras 3 sentenças como resumo
-        summary = " ".join(sentences[:3])
+    def _calculate_relevance(self, article: NewsArticle, query: NewsSearchQuery) -> float:
+        """Calcula pontuação de relevância para um artigo"""
+        score = 0.0
         
-        # Limita o tamanho
-        max_length = 500
-        if len(summary) > max_length:
-            summary = summary[:max_length] + "..."
-            
-        return summary
+        # Relevância do título
+        if query.topic.lower() in article.title.lower():
+            score += 0.4
+        
+        # Relevância das tags
+        if article.tags and any(keyword.lower() in tag.lower() for keyword in query.keywords for tag in article.tags):
+            score += 0.3
+        
+        # Relevância do resumo
+        if query.topic.lower() in article.summary.lower():
+            score += 0.2
+        
+        # Bônus por engajamento
+        if article.metadata:
+            reactions = article.metadata.get("reactions_count", 0)
+            comments = article.metadata.get("comments_count", 0)
+            if reactions > 50 or comments > 10:
+                score += 0.1
+        
+        return min(score, 1.0)

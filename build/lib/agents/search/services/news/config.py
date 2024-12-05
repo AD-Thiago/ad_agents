@@ -1,87 +1,55 @@
 # agents/search/services/news/config.py
 
-from typing import Dict, List
-from pydantic import BaseSettings, HttpUrl, Field
+from pydantic import BaseSettings, Field
+from typing import Dict, List, Optional
 from datetime import timedelta
+from pathlib import Path
+import os
+from dotenv import load_dotenv
+
+# Carregar variáveis de ambiente do .env
+env_path = Path('.') / '.env'
+load_dotenv(dotenv_path=env_path)
 
 class NewsApiConfig(BaseSettings):
     """Configurações para integrações com APIs de notícias"""
     
-    TECH_NEWS_SOURCES: Dict[str, Dict] = {
-        "tech_crunch": {
-            "name": "TechCrunch",
-            "base_url": "https://api.techcrunch.com/v1/",
-            "priority": 1,
-            "categories": ["technology", "startups", "ai", "cloud"]
-        },
-        "hacker_news": {
-            "name": "Hacker News",
-            "base_url": "https://hacker-news.firebaseio.com/v0/",
-            "priority": 2,
-            "categories": ["technology", "programming", "data-science"]
-        },
-        "dev_to": {
-            "name": "Dev.to",
-            "base_url": "https://dev.to/api/",
-            "priority": 3,
-            "categories": ["development", "programming", "webdev"]
-        },
-        "the_verge": {
-            "name": "The Verge",
-            "base_url": "https://www.theverge.com/api/v1/",
-            "priority": 4,
-            "categories": ["technology", "gadgets", "ai"]
-        },
-        "reuters_tech": {
-            "name": "Reuters Technology",
-            "base_url": "https://api.reuters.com/tech/v2/",
-            "priority": 5,
-            "categories": ["technology", "business", "innovation"]
-        }
-    }
-
-    # Cache settings
-    CACHE_TTL: int = 3600  # 1 hora
-    MAX_CACHE_ITEMS: int = 10000
+    # Dev.to
+    DEVTO_API_KEY: Optional[str] = Field(None, env='NEWS_DEVTO_API_KEY')
+    DEVTO_MAX_RESULTS: int = Field(100, env='NEWS_DEVTO_MAX_RESULTS')
+    DEVTO_RATE_LIMIT: int = Field(3000, env='NEWS_DEVTO_RATE_LIMIT')
     
-    # Rate limiting
-    DEFAULT_RATE_LIMIT: int = 100  # requisições por minuto
-    RATE_LIMIT_WINDOW: int = 60  # segundos
+    # Cache
+    CACHE_TTL: int = Field(3600, env='NEWS_CACHE_TTL')
+    MAX_CACHE_ITEMS: int = Field(10000, env='NEWS_MAX_CACHE_ITEMS')
     
-    # Retry settings
-    MAX_RETRIES: int = 3
-    RETRY_DELAY: int = 1  # segundos
-    
-    # Timeout settings
-    REQUEST_TIMEOUT: int = 30  # segundos
-    
-    # Content settings
-    MIN_ARTICLE_LENGTH: int = 100  # palavras
-    MAX_SUMMARY_LENGTH: int = 500  # caracteres
-    
-    # Relevance calculation weights
+    # Relevância
+    MIN_RELEVANCE_SCORE: float = Field(0.3, env='NEWS_MIN_RELEVANCE')
     RELEVANCE_WEIGHTS: Dict[str, float] = {
         "title_match": 0.4,
-        "content_match": 0.3,
-        "recency": 0.2,
-        "source_priority": 0.1
+        "tag_match": 0.3,
+        "content_match": 0.2,
+        "engagement": 0.1
     }
     
-    # Date range settings
-    DEFAULT_DATE_RANGE: timedelta = timedelta(days=30)
-    MAX_DATE_RANGE: timedelta = timedelta(days=365)
+    # Limites
+    DEFAULT_MAX_RESULTS: int = Field(50, env='NEWS_DEFAULT_MAX_RESULTS')
+    MAX_SEARCH_PERIOD: timedelta = Field(
+        default_factory=lambda: timedelta(days=int(os.getenv('NEWS_MAX_SEARCH_PERIOD', '30'))),
+    )
     
-    # Language settings
-    SUPPORTED_LANGUAGES: List[str] = ["en", "pt-br", "es"]
-    DEFAULT_LANGUAGE: str = "en"
+    # Configurações de fontes
+    ENABLED_SOURCES: List[str] = Field(
+        default=["dev.to"],
+        env='NEWS_ENABLED_SOURCES'
+    )
     
-    # Search settings
-    MIN_RELEVANCE_SCORE: float = 0.5
-    DEFAULT_MAX_RESULTS: int = 50
-    
-    # Monitoring
-    ENABLE_METRICS: bool = True
-    METRICS_PREFIX: str = "news_integration"
+    # Rate Limiting Global
+    RATE_LIMIT_WINDOW: int = Field(60, env='NEWS_RATE_LIMIT_WINDOW')
+    MAX_REQUESTS_PER_WINDOW: int = Field(1000, env='NEWS_MAX_REQUESTS_PER_WINDOW')
     
     class Config:
         env_prefix = "NEWS_"
+        case_sensitive = True
+        env_file = ".env"
+        env_file_encoding = 'utf-8'

@@ -1,2 +1,4 @@
 # agents/search/__init__.py
-from .services import *
+from agents.search.services.news import NewsIntegrationService, NewsArticle, NewsSearchQuery
+
+__all__ = ['NewsIntegrationService', 'NewsArticle', 'NewsSearchQuery']

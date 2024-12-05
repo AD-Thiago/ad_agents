@@ -1,22 +1,15 @@
 # tests/test_news_integration.py
 
 import pytest
-import asyncio
 from datetime import datetime, timedelta
-from unittest.mock import Mock, patch
+from unittest.mock import patch, Mock
 from agents.search.services.news.service import NewsIntegrationService
 from agents.search.services.news.models import NewsSearchQuery
+from agents.search.services.news.clients.devto import DevToArticle
 
 pytestmark = pytest.mark.asyncio
 
-@pytest.fixture(scope="session")
-def event_loop():
-    """Create an instance of the default event loop for the test session."""
-    loop = asyncio.get_event_loop_policy().new_event_loop()
-    yield loop
-    loop.close()
-
-@pytest.fixture(scope="function")
+@pytest.fixture
 async def news_service():
     """Fixture para o serviço de notícias"""
     service = NewsIntegrationService()
@@ -27,95 +20,109 @@ async def news_service():
         await service.close()
 
 @pytest.fixture
-def mock_response():
-    """Mock para respostas HTTP"""
-    class MockResponse:
-        def __init__(self, data):
-            self._data = data
+def mock_devto_response():
+    """Mock para resposta do Dev.to"""
+    return [
+        {
+            "id": 1,
+            "title": "Understanding Python Async",
+            "description": "A guide to async/await in Python",
+            "url": "https://dev.to/test/python-async",
+            "published_at": datetime.now().isoformat(),
+            "tag_list": ["python", "programming"],
+            "user": {
+                "name": "Test Author",
+                "username": "testuser"
+            },
+            "reading_time_minutes": 5,
+            "comments_count": 10,
+            "public_reactions_count": 20
+        },
+        {
+            "id": 2,
+            "title": "JavaScript Best Practices",
+            "description": "Writing better JavaScript code",
+            "url": "https://dev.to/test/javascript",
+            "published_at": (datetime.now() - timedelta(days=2)).isoformat(),
+            "tag_list": ["javascript", "webdev"],
+            "user": {
+                "name": "Another Author",
+                "username": "jsdev"
+            },
+            "reading_time_minutes": 8,
+            "comments_count": 15,
+            "public_reactions_count": 30
+        }
+    ]
 
-        async def json(self):
-            return self._data
-
-        async def text(self):
-            return "<html><body><article>Test content</article></body></html>"
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            pass
-
-    return MockResponse
-
-@pytest.fixture(autouse=True)
-async def setup_teardown():
-    """Fixture para setup e teardown global"""
-    # Setup
-    yield
-    # Teardown - limpar registry do prometheus
-    from prometheus_client import REGISTRY
-    collectors = list(REGISTRY._collector_to_names.keys())
-    for collector in collectors:
-        REGISTRY.unregister(collector)
-
-async def test_search_news_basic(news_service, mock_response):
-    """Testa busca básica de notícias"""
-    mock_data = {
-        "articles": [
-            {
-                "title": "Test Article",
-                "url": "https://example.com/article",
-                "published_at": datetime.now().isoformat(),
-                "author": "Test Author",
-                "summary": "Test summary",
-                "category": "technology"
-            }
-        ]
-    }
-
-    # Configurar o mock
-    mock_resp = mock_response(mock_data)
+async def test_search_integration(news_service, mock_devto_response):
+    """Testa integração completa da busca"""
+    # Criar query
+    query = NewsSearchQuery(
+        topic="python",
+        keywords=["programming"],
+        start_date=datetime.now() - timedelta(days=7),
+        min_relevance=0.3,
+        max_results=10
+    )
     
-    with patch.object(news_service.session, 'get', return_value=mock_resp):
-        query = NewsSearchQuery(
-            topic="test",
-            keywords=["python", "technology"],
-            start_date=datetime.now() - timedelta(days=7)
-        )
-        
+    # Mock do cliente Dev.to
+    with patch.object(news_service.devto_client, 'get_articles', return_value=[
+        DevToArticle.parse_obj(article) for article in mock_devto_response
+    ]):
         results = await news_service.search_news(query)
-        assert isinstance(results, list)
+        
+        assert len(results) > 0
+        assert any("Python" in article.title for article in results)
+        assert all(article.source == "dev.to" for article in results)
 
-async def test_cache_functionality(news_service, mock_response):
-    """Testa funcionalidade de cache"""
-    mock_data = {
-        "articles": [
-            {
-                "title": "Cached Article",
-                "url": "https://example.com/cached",
-                "published_at": datetime.now().isoformat(),
-                "author": "Cache Test",
-                "summary": "Test cache functionality",
-                "category": "technology"
-            }
-        ]
-    }
-
-    query = NewsSearchQuery(topic="cache test")
-    mock_resp = mock_response(mock_data)
-
-    # Primeira chamada
-    with patch.object(news_service.session, 'get', return_value=mock_resp):
+async def test_cache_integration(news_service, mock_devto_response):
+    """Testa integração com cache"""
+    query = NewsSearchQuery(topic="python")
+    
+    # Mock do cliente Dev.to
+    with patch.object(news_service.devto_client, 'get_articles', return_value=[
+        DevToArticle.parse_obj(mock_devto_response[0])
+    ]) as mock_get:
+        # Primeira chamada
         results1 = await news_service.search_news(query)
-        assert isinstance(results1, list)
+        assert len(results1) > 0
+        assert mock_get.called
+        
+        # Segunda chamada (deve vir do cache)
+        mock_get.reset_mock()
+        results2 = await news_service.search_news(query)
+        assert len(results2) > 0
+        assert not mock_get.called
+        
+        # Verificar se resultados são iguais
+        assert results1 == results2
 
 async def test_error_handling(news_service):
-    """Testa tratamento de erros"""
-    query = NewsSearchQuery(topic="error test")
-
-    with patch.object(news_service.session, 'get', side_effect=Exception("Test error")):
+    """Testa tratamento de erros na integração"""
+    query = NewsSearchQuery(topic="python")
+    
+    # Simular erro no cliente
+    with patch.object(news_service.devto_client, 'get_articles', side_effect=Exception("API Error")):
         results = await news_service.search_news(query)
         assert len(results) == 0
 
-if __name__ == '__main__':
-    pytest.main(['-v', __file__])
+async def test_relevance_filtering(news_service, mock_devto_response):
+    """Testa filtro de relevância"""
+    query = NewsSearchQuery(
+        topic="python",
+        min_relevance=0.7  # Relevância alta
+    )
+    
+    # Mock do cliente Dev.to
+    with patch.object(news_service.devto_client, 'get_articles', return_value=[
+        DevToArticle.parse_obj(article) for article in mock_devto_response
+    ]):
+        results = await news_service.search_news(query)
+        
+        # Apenas artigos muito relevantes devem passar
+        assert all(
+            "Python" in article.title or 
+            "python" in article.tags 
+            for article in results
+        )

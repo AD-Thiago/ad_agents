@@ -71,20 +71,19 @@ class NewsMetrics:
 
     def get_metrics(self):
         """Retorna métricas atuais"""
-        return {
-            "requests": {
-                source: {
-                    "total": self.request_count.labels(source=source, status="success")._value.get(),
-                    "errors": self.request_count.labels(source=source, status="error")._value.get()
-                }
-                for source in ["tech_crunch", "hacker_news", "dev_to"]
-            },
-            "articles": {
-                source: self.article_count.labels(source=source)._value.get()
-                for source in ["tech_crunch", "hacker_news", "dev_to"]
-            },
-            "latency": {
-                source: self.request_latency.labels(source=source)._count.get()
-                for source in ["tech_crunch", "hacker_news", "dev_to"]
-            }
+        metrics = {
+            "requests": {},
+            "articles": {},
+            "active_requests": {}
         }
+
+        # Obter métricas de requisições para cada fonte
+        for source in ["tech_crunch", "hacker_news", "dev.to"]:
+            metrics["requests"][source] = {
+                "success": self.request_count.labels(source=source, status="success")._value.get(),
+                "error": self.request_count.labels(source=source, status="error")._value.get()
+            }
+            metrics["articles"][source] = self.article_count.labels(source=source)._value.get()
+            metrics["active_requests"][source] = self.active_requests.labels(source=source)._value
+
+        return metrics
