@@ -1,93 +1,133 @@
-# agents\search\config.py
-from pydantic import BaseSettings, Field
+# agents/search/config.py
+
 from typing import Dict, List, Optional
+from pydantic import BaseSettings, Field, HttpUrl
 
 class SearchAgentConfig(BaseSettings):
-    """Configurações do Search Agent"""
+    """Configurações avançadas para o Search Agent"""
     
-    # Configurações Pinecone
-    pinecone_api_key: str = Field(..., env='PINECONE_API_KEY')
-    pinecone_environment: str = Field('us-west1-gcp', env='PINECONE_ENV')
-    pinecone_index_name: str = Field('ad-agents-index', env='PINECONE_INDEX')
+    # Configurações de API
+    OPENAI_API_KEY: str = Field(..., env='OPENAI_API_KEY')
     
-    # Configurações HuggingFace
-    hf_model_name: str = Field('sentence-transformers/all-mpnet-base-v2', env='HF_MODEL')
-    hf_api_key: Optional[str] = Field(None, env='HF_API_KEY')
+    # Configurações de Embedding
+    EMBEDDING_MODEL: str = "sentence-transformers/all-mpnet-base-v2"
+    EMBEDDING_BATCH_SIZE: int = 32
     
-    # Configurações de Cache
-    cache_ttl: int = Field(3600, env='CACHE_TTL')  # 1 hora
-    max_cache_items: int = Field(1000, env='MAX_CACHE_ITEMS')
+    # Vector Store
+    VECTOR_STORE_TYPE: str = "faiss"  # faiss ou pinecone
+    VECTOR_SIMILARITY_THRESHOLD: float = 0.75
+    MAX_RESULTS_PER_QUERY: int = 10
     
-    # Configurações de Busca
-    min_relevance_score: float = Field(0.7, env='MIN_RELEVANCE_SCORE')
-    max_results_per_source: int = Field(10, env='MAX_RESULTS_PER_SOURCE')
-    default_search_timeout: int = Field(30, env='SEARCH_TIMEOUT')  # segundos
+    # Cache
+    CACHE_TTL: int = 3600  # 1 hora
+    MAX_CACHE_ITEMS: int = 10000
     
-    # Configurações de Embeddings
-    embedding_model: str = Field('all-mpnet-base-v2', env='EMBEDDING_MODEL')
-    embedding_dimension: int = Field(768, env='EMBEDDING_DIM')
+    # Rate Limiting
+    MAX_REQUESTS_PER_MINUTE: int = 60
+    MAX_TOKENS_PER_MINUTE: int = 100000
     
-    # Configurações de Rate Limiting
-    rate_limit_searches: int = Field(100, env='RATE_LIMIT_SEARCHES')  # por minuto
-    rate_limit_indexing: int = Field(50, env='RATE_LIMIT_INDEXING')  # por minuto
+    # Content Validation
+    MIN_CONFIDENCE_SCORE: float = 0.8
+    REQUIRED_SUPPORTING_SOURCES: int = 2
     
-    # Fontes de dados confiáveis
-    trusted_sources: List[str] = Field(
-        default=[
-            'github.com',
-            'arxiv.org',
-            'papers.ssrn.com',
-            'scholar.google.com',
-            'stackoverflow.com',
-            'ieee.org',
-            'acm.org'
-        ]
-    )
-    
-    # Filtros de conteúdo
-    content_filters: Dict[str, List[str]] = Field(
-        default={
-            'languages': ['en', 'pt-br'],
-            'max_age_days': 365,
-            'min_words': 100
+    # Notícias e Atualizações
+    NEWS_SOURCES: Dict[str, Dict] = {
+        "tech_crunch": {
+            "name": "TechCrunch",
+            "base_url": "https://api.techcrunch.com/v1/",
+            "priority": 1,
+            "categories": ["technology", "ai", "cloud"]
+        },
+        "hacker_news": {
+            "name": "Hacker News",
+            "base_url": "https://hacker-news.firebaseio.com/v0/",
+            "priority": 2,
+            "categories": ["technology", "programming"]
+        },
+        "dev_to": {
+            "name": "Dev.to",
+            "base_url": "https://dev.to/api/",
+            "priority": 3,
+            "categories": ["development", "programming"]
         }
-    )
+    }
     
-    # Configurações de Retry
-    max_retries: int = Field(3, env='MAX_RETRIES')
-    retry_delay: int = Field(1, env='RETRY_DELAY')  # segundos
+    # Fonte de dados confiáveis
+    TRUSTED_DOMAINS: List[str] = [
+        "docs.python.org",
+        "developer.mozilla.org",
+        "kubernetes.io",
+        "cloud.google.com",
+        "aws.amazon.com",
+        "azure.microsoft.com",
+        "github.com",
+        "stackoverflow.com",
+        "arxiv.org",
+        "research.google.com",
+        "openai.com",
+        "pytorch.org",
+        "tensorflow.org"
+    ]
+    
+    # Métricas de qualidade
+    QUALITY_WEIGHTS: Dict[str, float] = {
+        "relevance": 0.4,
+        "freshness": 0.2,
+        "authority": 0.2,
+        "completeness": 0.2
+    }
+    
+    # Parâmetros de processamento
+    MAX_CONTENT_LENGTH: int = 100000
+    MIN_CONTENT_LENGTH: int = 100
+    CHUNK_SIZE: int = 1000
+    CHUNK_OVERLAP: int = 200
+    
+    # Configurações de busca
+    SEARCH_DEFAULTS: Dict[str, Any] = {
+        "min_relevance": 0.6,
+        "max_age_days": 365,
+        "max_results": 20,
+        "include_content": True
+    }
+    
+    # Configurações de análise
+    ANALYSIS_OPTIONS: Dict[str, bool] = {
+        "extract_code_snippets": True,
+        "extract_links": True,
+        "analyze_sentiment": False,
+        "detect_language": True,
+        "generate_summary": True
+    }
+    
+    # Timeouts e tentativas
+    REQUEST_TIMEOUT: int = 30  # segundos
+    MAX_RETRIES: int = 3
+    RETRY_DELAY: int = 1  # segundos
+    
+    # Monitoring
+    ENABLE_METRICS: bool = True
+    METRICS_PREFIX: str = "search_agent"
+    LOG_LEVEL: str = "INFO"
     
     class Config:
-        env_prefix = 'SEARCH_'  # Prefixo para variáveis de ambiente
-        case_sensitive = False
-        
-    def get_pinecone_config(self) -> Dict:
-        """Retorna configurações formatadas para Pinecone"""
-        return {
-            "api_key": self.pinecone_api_key,
-            "environment": self.pinecone_environment,
-            "index_name": self.pinecone_index_name
-        }
+        env_prefix = "SEARCH_"
+        case_sensitive = True
+
+    def get_news_source_config(self, source_id: str) -> Optional[Dict]:
+        """Retorna configuração para uma fonte específica"""
+        return self.NEWS_SOURCES.get(source_id)
     
-    def get_huggingface_config(self) -> Dict:
-        """Retorna configurações formatadas para HuggingFace"""
-        return {
-            "model_name": self.hf_model_name,
-            "api_key": self.hf_api_key,
-            "embedding_model": self.embedding_model
-        }
+    def is_trusted_domain(self, domain: str) -> bool:
+        """Verifica se um domínio é confiável"""
+        return any(domain.endswith(trusted) for trusted in self.TRUSTED_DOMAINS)
     
-    def get_cache_config(self) -> Dict:
-        """Retorna configurações de cache"""
-        return {
-            "ttl": self.cache_ttl,
-            "max_items": self.max_cache_items
-        }
-    
-    def get_search_config(self) -> Dict:
-        """Retorna configurações de busca"""
-        return {
-            "min_score": self.min_relevance_score,
-            "max_results": self.max_results_per_source,
-            "timeout": self.default_search_timeout
-        }
+    def get_quality_score(self, metrics: Dict[str, float]) -> float:
+        """Calcula pontuação de qualidade baseada nos pesos definidos"""
+        return sum(
+            metrics.get(metric, 0) * weight
+            for metric, weight in self.QUALITY_WEIGHTS.items()
+        )
+
+# Instância global de configuração
+config = SearchAgentConfig()

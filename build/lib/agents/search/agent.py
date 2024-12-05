@@ -1,20 +1,14 @@
-from typing import List, Dict, Optional, Any
+from typing import Dict, List, Optional, Any
 from pydantic import BaseModel, Field
-import asyncio
-from pinecone import Pinecone, ServerlessSpec
 from datetime import datetime
+import asyncio
+import numpy as np
 from langchain.embeddings import HuggingFaceEmbeddings
 from langchain.vectorstores import FAISS
-from langchain.vectorstores.pinecone import Pinecone as LangchainPinecone
+from langchain.text_splitter import RecursiveCharacterTextSplitter
 from core.rabbitmq_utils import RabbitMQUtils
 from core.config import get_settings
-
-class SearchQuery(BaseModel):
-    """Modelo para consultas de busca"""
-    query: str
-    context: str
-    filters: Dict[str, Any] = Field(default_factory=dict)
-    min_relevance: float = 0.7
+import json
 
 class SearchResult(BaseModel):
     """Modelo para resultados de busca"""
@@ -24,123 +18,202 @@ class SearchResult(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict)
     timestamp: datetime = Field(default_factory=datetime.now)
 
-class SearchAgent:
-    """Agente avançado de busca com múltiplas integrações"""
+class ContentValidation(BaseModel):
+    """Modelo para validação de conteúdo"""
+    claim: str
+    is_valid: bool
+    confidence_score: float
+    supporting_sources: List[str]
+    suggestions: Optional[List[str]]
+
+class AudienceInsight(BaseModel):
+    """Modelo para insights sobre audiência"""
+    preferences: List[str]
+    pain_points: List[str]
+    technical_level: str
+    common_questions: List[str]
+    preferred_formats: List[str]
+
+class SEOInsight(BaseModel):
+    """Modelo para insights de SEO"""
+    primary_keywords: List[tuple]  # (keyword, volume)
+    related_keywords: List[tuple]
+    questions: List[str]
+    competing_content: List[Dict]
+    suggested_structure: Dict[str, Any]
+
+class EnhancedSearchAgent:
+    """Agente de busca aprimorado com múltiplas funcionalidades"""
 
     def __init__(self):
         self.settings = get_settings()
-        self.rabbitmq = RabbitMQUtils()  # Integração RabbitMQ
-        self._setup_embeddings()
-        self._setup_vector_stores()
-        self._setup_cache()
+        self.rabbitmq = RabbitMQUtils()
+        self.embeddings = HuggingFaceEmbeddings(
+            model_name="sentence-transformers/all-mpnet-base-v2"
+        )
+        self.text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=1000,
+            chunk_overlap=200
+        )
+        self.setup_vector_store()
+        self.setup_cache()
 
-    def _setup_embeddings(self):
-        """Configura modelos de embedding"""
-        self.embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-mpnet-base-v2")
-
-    def _setup_vector_stores(self):
-        """Configura bases de vetores"""
-        self.faiss_index = FAISS.from_texts(
-            texts=["documento inicial para FAISS"],
+    def setup_vector_store(self):
+        """Configura armazenamento vetorial"""
+        self.vector_store = FAISS.from_texts(
+            texts=["inicialização do índice"],
             embedding=self.embeddings,
             metadatas=[{"source": "initialization"}]
         )
-        self.pinecone_index = None  # Configuração omitida para simplificar
 
-    def _setup_cache(self):
+    def setup_cache(self):
         """Configura sistema de cache"""
         self.cache = {}
         self.cache_ttl = 3600  # 1 hora
 
-    async def search(self, query: SearchQuery) -> List[SearchResult]:
-        """Realiza busca em múltiplas fontes"""
-        cache_key = f"{query.query}_{query.context}"
-        if cache_key in self.cache:
-            return self.cache[cache_key]
+    async def enrich_content_plan(self, topic: str, keywords: List[str], target_audience: str) -> Dict:
+        """
+        Enriquece o plano de conteúdo com pesquisas e análises
+        """
+        tasks = [
+            self.search_recent_developments(topic),
+            self.validate_technical_aspects(topic),
+            self.analyze_similar_content(topic, keywords),
+            self.gather_seo_insights(keywords),
+            self.analyze_audience_preferences(target_audience)
+        ]
+        
+        results = await asyncio.gather(*tasks)
+        
+        return {
+            "recent_developments": results[0],
+            "technical_validations": results[1],
+            "competitive_analysis": results[2],
+            "seo_insights": results[3],
+            "audience_insights": results[4]
+        }
 
-        query_embedding = await self._generate_embedding(query.query)
-        results = await asyncio.gather(
-            self._search_local_index(query_embedding, query),
-            self._search_huggingface(query)
+    async def search_recent_developments(self, topic: str) -> List[SearchResult]:
+        """
+        Busca desenvolvimentos recentes sobre o tópico
+        """
+        # Implementar integração com APIs de notícias/blogs técnicos
+        # Por enquanto, retorna exemplo
+        return [
+            SearchResult(
+                content=f"Último desenvolvimento sobre {topic}",
+                source="tech_news",
+                relevance_score=0.95,
+                metadata={"date": datetime.now().isoformat()}
+            )
+        ]
+
+    async def validate_technical_aspects(self, topic: str) -> List[ContentValidation]:
+        """
+        Valida aspectos técnicos do tópico
+        """
+        # Implementar validação contra fontes técnicas confiáveis
+        return [
+            ContentValidation(
+                claim=f"Validação técnica para {topic}",
+                is_valid=True,
+                confidence_score=0.85,
+                supporting_sources=["docs.python.org"],
+                suggestions=["Adicionar mais exemplos práticos"]
+            )
+        ]
+
+    async def analyze_similar_content(self, topic: str, keywords: List[str]) -> Dict:
+        """
+        Analisa conteúdo similar existente
+        """
+        results = await self._search_vector_store(topic)
+        
+        # Análise de gaps e oportunidades
+        return {
+            "similar_content": results,
+            "content_gaps": ["Gap 1", "Gap 2"],
+            "unique_angles": ["Ângulo 1", "Ângulo 2"]
+        }
+
+    async def gather_seo_insights(self, keywords: List[str]) -> SEOInsight:
+        """
+        Coleta insights de SEO
+        """
+        # Implementar integração com APIs de SEO
+        return SEOInsight(
+            primary_keywords=[("python", 1000)],
+            related_keywords=[("python programming", 800)],
+            questions=["How to learn Python?"],
+            competing_content=[],
+            suggested_structure={
+                "introduction": ["key_point_1", "key_point_2"],
+                "main_sections": ["section_1", "section_2"],
+                "conclusion": ["summary", "next_steps"]
+            }
         )
 
-        consolidated = self._consolidate_results(results)
-        filtered = [r for r in consolidated if r.relevance_score >= query.min_relevance]
-        self.cache[cache_key] = filtered
-        return filtered
+    async def analyze_audience_preferences(self, target_audience: str) -> AudienceInsight:
+        """
+        Analisa preferências da audiência
+        """
+        return AudienceInsight(
+            preferences=["Clear explanations", "Code examples"],
+            pain_points=["Complex documentation", "Lack of examples"],
+            technical_level="intermediate",
+            common_questions=["How to start?", "Best practices?"],
+            preferred_formats=["Tutorials", "How-to guides"]
+        )
 
-    async def _generate_embedding(self, text: str) -> List[float]:
-        """Gera embedding usando HuggingFace"""
-        return self.embeddings.embed_query(text)
-
-    async def _search_local_index(self, query_embedding: List[float], query: SearchQuery) -> List[SearchResult]:
-        """Busca no índice FAISS local"""
-        results = self.faiss_index.similarity_search_with_score(query.query, k=5)
+    async def _search_vector_store(self, query: str) -> List[SearchResult]:
+        """
+        Realiza busca no armazenamento vetorial
+        """
+        query_embedding = self.embeddings.embed_query(query)
+        results = self.vector_store.similarity_search_with_score(query, k=5)
+        
         return [
             SearchResult(
-                content=r[0].page_content,
-                source="faiss",
-                relevance_score=float(r[1]),
-                metadata=r[0].metadata
+                content=result[0].page_content,
+                source="vector_store",
+                relevance_score=float(result[1]),
+                metadata=result[0].metadata
             )
-            for r in results
+            for result in results
         ]
-
-    async def _search_huggingface(self, query: SearchQuery) -> List[SearchResult]:
-        """Busca usando modelos HuggingFace"""
-        return [
-            SearchResult(
-                content="Resultado HuggingFace",
-                source="huggingface",
-                relevance_score=0.8,
-                metadata={"query": query.query}
-            )
-        ]
-
-    def _consolidate_results(self, results: List[List[SearchResult]]) -> List[SearchResult]:
-        """Consolida e ranqueia resultados de diferentes fontes"""
-        all_results = []
-        for result_group in results:
-            all_results.extend(result_group)
-
-        seen = set()
-        unique_results = []
-        for result in all_results:
-            content_hash = hash(f"{result.content}_{result.source}")
-            if content_hash not in seen:
-                seen.add(content_hash)
-                unique_results.append(result)
-
-        return sorted(unique_results, key=lambda x: x.relevance_score, reverse=True)
-
-    def consume_search_requests(self):
-        """Consome mensagens da fila 'search.requests' e processa buscas"""
-        def callback(ch, method, properties, body):
-            import json
-            message = json.loads(body)
-            print(f"Consulta recebida: {message}")
-            try:
-                query = SearchQuery(**message)
-                results = asyncio.run(self.search(query))
-                self.rabbitmq.publish_event("search.results", [r.dict() for r in results])
-                print(f"Resultados publicados: {results}")
-            except Exception as e:
-                print(f"Erro ao processar consulta: {str(e)}")
-
-        self.rabbitmq.consume_event("search.requests", callback)
 
     async def index_content(self, content: str, metadata: Dict[str, Any]):
-        """Indexa novo conteúdo para busca futura"""
-        content_vector = self.embeddings.embed_query(content)
-        self.faiss_index.add_texts([content], [metadata])
+        """
+        Indexa novo conteúdo no armazenamento vetorial
+        """
+        chunks = self.text_splitter.split_text(content)
+        chunk_metadatas = [metadata for _ in chunks]
+        self.vector_store.add_texts(chunks, metadatas=chunk_metadatas)
+
+    def start_consuming(self):
+        """
+        Inicia consumo de mensagens do RabbitMQ
+        """
+        def callback(ch, method, properties, body):
+            message = json.loads(body)
+            print(f"Mensagem recebida: {message}")
+            
+            # Processar mensagem e enriquecer conteúdo
+            enriched_data = asyncio.run(self.enrich_content_plan(
+                topic=message.get("topic", ""),
+                keywords=message.get("keywords", []),
+                target_audience=message.get("target_audience", "")
+            ))
+            
+            # Publicar resultados enriquecidos
+            self.rabbitmq.publish_event(
+                "search.results",
+                json.dumps(enriched_data, default=str)
+            )
+
+        self.rabbitmq.consume_event("planning.generated", callback)
 
 if __name__ == "__main__":
-    async def test():
-        agent = SearchAgent()
-        query = SearchQuery(query="IA generativa", context="tecnologia")
-        results = await agent.search(query)
-        print(f"Resultados encontrados: {len(results)}")
-        for r in results:
-            print(f"Fonte: {r.source}, Relevância: {r.relevance_score}")
-
-    asyncio.run(test())
+    agent = EnhancedSearchAgent()
+    print("Search Agent iniciado. Aguardando mensagens...")
+    agent.start_consuming()

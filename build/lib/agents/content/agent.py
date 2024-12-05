@@ -57,19 +57,25 @@ class ContentAgent:
     def consume_plans(self):
         """Consome mensagens da fila 'planning.generated'"""
         def callback(ch, method, properties, body):
-            try:
-                plan = PlanningGenerated(**json.loads(body))
-                logger.info(f"Plano recebido: {plan}")
+           plans = json.loads(body)  # Carregar a lista de planos
+           for plan_data in plans:  # Iterar sobre cada plano
+              try:
+                if isinstance(plan_data.get("target_audience"), list):
+                 plan_data["target_audience"] = ", ".join(plan_data["target_audience"])
+                plan = PlanningGenerated(**plan_data)  # Criar instância de cada plano
+                print(f"Plano recebido: {plan}")
 
+                # Gera conteúdo com base no plano
                 content = self.generate_content(plan)
 
+                # Publica na fila 'content.generated'
                 self.rabbitmq.publish_event("content.generated", self._serialize_message(content.dict()))
-                logger.info(f"Conteúdo gerado publicado: {content}")
+                print(f"Conteúdo gerado publicado: {content}")
 
-            except ValidationError as e:
-                logger.error(f"Erro de validação: {e}")
-            except Exception as e:
-                logger.error(f"Erro ao processar mensagem: {e}")
+              except ValidationError as e:
+               print(f"Erro de validação: {e}")
+              except Exception as e:
+               print(f"Erro ao processar plano: {e}")
 
         self.rabbitmq.consume_event("planning.generated", callback)
 

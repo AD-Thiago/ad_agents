@@ -1,4 +1,6 @@
 agents
 api
 core
+examples
 infrastructure
+tests
