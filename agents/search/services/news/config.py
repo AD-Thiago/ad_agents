@@ -51,8 +51,9 @@ class NewsApiConfig(BaseSettings):
     
     # Limites
     DEFAULT_MAX_RESULTS: int = Field(50, env='NEWS_DEFAULT_MAX_RESULTS')
-    MAX_SEARCH_PERIOD: timedelta = Field(
-        default_factory=lambda: timedelta(days=int(os.getenv('NEWS_MAX_SEARCH_PERIOD', '30'))),
+    MAX_SEARCH_PERIOD: int = Field(
+        default=30,  # 30 dias por padrão
+        env='NEWS_MAX_SEARCH_PERIOD'
     )
     
     # Configurações de fontes
@@ -75,3 +76,7 @@ class NewsApiConfig(BaseSettings):
         super().__init__(*args, **kwargs)
         logger.info("Configurações de API carregadas")
         logger.debug(f"Configurações: {self.dict()}")
+
+    def get_max_search_period_timedelta(self) -> timedelta:
+        """Retorna o período máximo de busca como timedelta"""
+        return timedelta(days=self.MAX_SEARCH_PERIOD)
