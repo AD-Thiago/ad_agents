@@ -1,16 +1,19 @@
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional, Any, Union
 from datetime import datetime
-from pydantic import BaseModel, Field, HttpUrl
+from pydantic import BaseModel, Field
 
-class NewsSource(BaseModel):
-    """Configuração de fonte de notícias"""
-    name: str
-    base_url: str
-    api_key: Optional[str] = None
-    priority: int = Field(default=1, ge=1, le=10)
-    enabled: bool = True
-    categories: List[str] = Field(default_factory=list)
-    rate_limit: Optional[int] = None
+class NewsArticle(BaseModel):
+    """Modelo para artigos de notícias"""
+    title: str
+    url: str
+    author: Optional[str] = "Unknown"
+    source: str
+    published_date: datetime
+    summary: str = ""
+    tags: List[str] = Field(default_factory=list)  # Simplificando para lista de strings
+    category: str = "technology"
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    relevance_score: float = 0.0
 
 class NewsSearchQuery(BaseModel):
     """Modelo para consultas de busca de notícias"""

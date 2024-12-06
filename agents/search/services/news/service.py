@@ -1,3 +1,5 @@
+# agents/search/services/news/service.py
+
 import asyncio
 import aiohttp
 from typing import List, Dict, Any, Optional
@@ -29,8 +31,6 @@ class NewsIntegrationService:
         self.cache = NewsCache(self.config)
         self.metrics = NewsMetrics()
         self.session = None
-
-        # Inicializar clientes como None para configurar após criar a sessão
         self.hacker_news_client = None
         self.tech_crunch_client = None
         self.dev_to_client = None
@@ -40,15 +40,21 @@ class NewsIntegrationService:
         logger.info("Initializing News Integration Service")
         if not self.session:
             self.session = aiohttp.ClientSession()
-
-        # Passar a sessão ao inicializar os clientes
+        
         self.hacker_news_client = HackerNewsClient(self.config.HACKER_NEWS_API_URL, self.session)
-        self.tech_crunch_client = TechCrunchClient(self.config.TECH_CRUNCH_API_URL, self.config.TECH_CRUNCH_API_KEY, self.session)
-        self.dev_to_client = DevToClient(self.config.DEVTO_API_URL, self.config.DEVTO_API_KEY, self.session)
+        self.tech_crunch_client = TechCrunchClient(
+            self.config.TECH_CRUNCH_API_URL,
+            self.config.TECH_CRUNCH_API_KEY,
+            self.session
+        )
+        self.dev_to_client = DevToClient(
+            self.config.DEVTO_API_URL,
+            self.config.DEVTO_API_KEY,
+            self.session
+        )
 
     async def close(self):
         """Fecha conexões"""
-        logger.info("Shutting down News Integration Service")
         if self.session:
             await self.session.close()
             self.session = None
@@ -57,9 +63,16 @@ class NewsIntegrationService:
     async def search_news(self, query: NewsSearchQuery) -> List[NewsArticle]:
         """Busca notícias com base nos parâmetros fornecidos"""
         try:
-            # Garantir que as datas têm timezone
+            # Verificar datas e timezone
             query.start_date = ensure_timezone(query.start_date)
             query.end_date = ensure_timezone(query.end_date)
+
+            # Limitar período de busca
+            max_period = self.config.get_max_search_period_timedelta()
+            if query.start_date and query.end_date:
+                if (query.end_date - query.start_date) > max_period:
+                    logger.warning(f"Período de busca maior que o máximo permitido. Limitando a {max_period.days} dias")
+                    query.start_date = query.end_date - max_period
 
             # Verificar cache
             cache_key = str(query.dict())
@@ -68,7 +81,7 @@ class NewsIntegrationService:
                 logger.info(f"Cache hit for query: {query.topic}")
                 return cached_results
 
-            # Buscar em todas as fontes configuradas
+            # Buscar em todas as fontes
             results = await asyncio.gather(
                 self.fetch_hacker_news(query.topic),
                 self.fetch_tech_crunch(query.topic),
@@ -76,7 +89,7 @@ class NewsIntegrationService:
                 return_exceptions=True
             )
 
-            # Processar resultados e lidar com erros
+            # Processar resultados
             all_articles = []
             for result in results:
                 if isinstance(result, list):
@@ -84,16 +97,18 @@ class NewsIntegrationService:
                 elif isinstance(result, Exception):
                     logger.error(f"Erro ao buscar notícias: {result}")
 
-            # Filtrar e ordenar resultados
+            # Filtrar e ordenar
             filtered_results = self._filter_and_sort_results(all_articles, query)
 
-            # Armazenar no cache
+            # Atualizar cache
             self.cache.set(cache_key, filtered_results)
 
             return filtered_results
         except Exception as e:
             logger.error(f"Erro inesperado no método search_news: {str(e)}")
             return []
+
+    # ... resto do código continua igual ...
 
     async def fetch_hacker_news(self, topic: str) -> List[NewsArticle]:
         """Busca artigos no Hacker News"""
@@ -146,27 +161,51 @@ class NewsIntegrationService:
         # Limitar número de resultados
         return filtered[:query.max_results] if query.max_results else filtered
 
-    def _calculate_relevance(self, article: NewsArticle, query: NewsSearchQuery) -> float:
+    # agents/search/services/news/service.py
+
+    # agents/search/services/news/service.py
+
+    def _calculate_relevance(self, article: NewsArticle, query: str) -> float:
         """Calcula pontuação de relevância para um artigo"""
         score = 0.0
         
-        # Relevância do título
-        if query.topic.lower() in article.title.lower():
-            score += 0.4
+        # Termos importantes para busca
+        important_terms = {
+            'python': 0.4,
+            'async': 0.3,
+            'asyncio': 0.4,
+            'await': 0.2,
+            'development': 0.1,
+            'programming': 0.1
+        }
         
-        # Relevância das tags
-        if article.tags and any(keyword.lower() in tag.lower() for keyword in query.keywords for tag in article.tags):
-            score += 0.3
-        
-        # Relevância do resumo
-        if query.topic.lower() in article.summary.lower():
-            score += 0.2
-        
+        # Verificar título
+        title_lower = article.title.lower()
+        for term, weight in important_terms.items():
+            if term in title_lower:
+                score += weight
+                
+        # Verificar tags
+        for tag in article.tags:
+            tag_lower = tag.lower()
+            for term, weight in important_terms.items():
+                if term in tag_lower:
+                    score += weight * 0.5  # Metade do peso para tags
+                    
+        # Verificar sumário
+        summary_lower = article.summary.lower()
+        for term, weight in important_terms.items():
+            if term in summary_lower:
+                score += weight * 0.3  # 30% do peso para sumário
+                
         # Bônus por engajamento
         if article.metadata:
-            reactions = article.metadata.get("reactions_count", 0)
-            comments = article.metadata.get("comments_count", 0)
-            if reactions > 50 or comments > 10:
+            points = article.metadata.get('points', 0)
+            comments = article.metadata.get('comments_count', 0)
+            
+            if points > 100 or comments > 50:
+                score += 0.2
+            elif points > 50 or comments > 25:
                 score += 0.1
-        
+                
         return min(score, 1.0)

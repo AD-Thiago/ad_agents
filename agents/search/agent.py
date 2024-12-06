@@ -82,23 +82,32 @@ class EnhancedSearchAgent:
         """Inicializa o agente de pesquisa"""
         logger.info("Inicializando o agente de pesquisa")
         if not self.session:
+        
             logger.info("Inicializando sessão HTTP para o agente de pesquisa")
             self.session = aiohttp.ClientSession()
 
         # Passar a sessão para os clientes ao inicializá-los
-        self.hacker_news_client = HackerNewsClient(self.news_config.HACKER_NEWS_API_URL, self.session)
-        self.tech_crunch_client = TechCrunchClient(self.news_config.TECH_CRUNCH_API_URL, self.news_config.TECH_CRUNCH_API_KEY, self.session)
-        self.dev_to_client = DevToClient(self.news_config.DEVTO_API_URL, self.news_config.DEVTO_API_KEY, self.session)
+        self.hacker_news_client = HackerNewsClient(
+            api_url=self.news_config.HACKER_NEWS_API_URL,
+            session=self.session
+            )
+    
+        self.tech_crunch_client = TechCrunchClient(
+            base_url="https://techcrunch.com",
+            session=self.session
+            )
+    
+        self.dev_to_client = DevToClient(
+            api_url=self.news_config.DEVTO_API_URL,
+            api_key=self.news_config.DEVTO_API_KEY,
+            session=self.session
+        )
 
+ 
     async def close(self):
         """Fecha conexões do agente de pesquisa"""
         logger.info("Fechando conexões do agente de pesquisa")
-        if self.hacker_news_client:
-            await self.hacker_news_client.close()
-        if self.tech_crunch_client:
-            await self.tech_crunch_client.close()
-        if self.dev_to_client:
-            await self.dev_to_client.close()
+        # Os clientes não precisam de close pois a sessão é compartilhada
         if self.session:
             await self.session.close()
             self.session = None
@@ -141,32 +150,35 @@ class EnhancedSearchAgent:
             "audience_insights": results[4]
         }
 
+    # agents/search/agent.py
+
     async def search_recent_developments(self, topic: str) -> List[SearchResult]:
         """
         Busca desenvolvimentos recentes sobre o tópico
         """
         logger.info(f"Buscando desenvolvimentos recentes sobre o tópico: {topic}")
+    
         # Integração com a API do Hacker News
         async with self.metrics.track_request("hacker_news"):
             logger.info("Buscando artigos no Hacker News")
-            hacker_news_results = await self.hacker_news_client.search(topic, self.session)
+            hacker_news_results = await self.hacker_news_client.search(topic)  # Removido self.session
             logger.debug(f"Resultados do Hacker News: {hacker_news_results}")
 
-        # Integração com a API do TechCrunch
+    # Integração com a API do TechCrunch
         async with self.metrics.track_request("tech_crunch"):
             logger.info("Buscando artigos no TechCrunch")
             tech_crunch_results = await self.tech_crunch_client.search_articles(topic)
             logger.debug(f"Resultados do TechCrunch: {tech_crunch_results}")
 
-        # Integração com a API do Dev.to
+    # Integração com a API do Dev.to
         async with self.metrics.track_request("dev_to"):
             logger.info("Buscando artigos no Dev.to")
             dev_to_results = await self.dev_to_client.search_articles(topic)
             logger.debug(f"Resultados do Dev.to: {dev_to_results}")
 
-        # Combinar resultados de todas as fontes
+    # Combinar resultados de todas as fontes
         return hacker_news_results + tech_crunch_results + dev_to_results
-
+        
     async def validate_technical_aspects(self, topic: str) -> List[ContentValidation]:
         """
         Valida aspectos técnicos do tópico
@@ -175,7 +187,7 @@ class EnhancedSearchAgent:
         # Implementar validação contra fontes técnicas confiáveis
         async with self.metrics.track_request("technical_validation"):
             return [
-                ContentValidation(
+                    ContentValidation(
                     claim=f"Validação técnica para {topic}",
                     is_valid=True,
                     confidence_score=0.85,

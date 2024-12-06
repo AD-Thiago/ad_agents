@@ -1,7 +1,4 @@
-   
-# agents/search/services/news/config.py
-
-from pydantic import BaseSettings, Field
+from pydantic import BaseSettings, Field, validator
 from typing import Dict, List, Optional
 from datetime import timedelta
 from pathlib import Path
@@ -31,7 +28,7 @@ class NewsApiConfig(BaseSettings):
     TECH_CRUNCH_RATE_LIMIT: int = Field(3000, env='TECH_CRUNCH_RATE_LIMIT')
 
     # Hacker News
-    HACKER_NEWS_API_URL: str = Field("http://hn.algolia.com/api/v1", env='HACKER_NEWS_API_URL')
+    HACKER_NEWS_API_URL: str = Field("https://hn.algolia.com/api/v1/search",env='HACKER_NEWS_API_URL')
     HACKER_NEWS_API_KEY: Optional[str] = Field(None, env='HACKER_NEWS_API_KEY')
     HACKER_NEWS_MAX_RESULTS: int = Field(100, env='HACKER_NEWS_MAX_RESULTS')
     HACKER_NEWS_RATE_LIMIT: int = Field(3000, env='HACKER_NEWS_RATE_LIMIT')
@@ -51,8 +48,11 @@ class NewsApiConfig(BaseSettings):
     
     # Limites
     DEFAULT_MAX_RESULTS: int = Field(50, env='NEWS_DEFAULT_MAX_RESULTS')
-    MAX_SEARCH_PERIOD: timedelta = Field(
-        default_factory=lambda: timedelta(days=int(os.getenv('NEWS_MAX_SEARCH_PERIOD', '30'))),
+    MAX_SEARCH_PERIOD: int = Field(
+        default=30,
+        description="Maximum search period in days",
+        env='NEWS_MAX_SEARCH_PERIOD',
+        ge=1
     )
     
     # Configurações de fontes
@@ -71,7 +71,20 @@ class NewsApiConfig(BaseSettings):
         env_file = ".env"
         env_file_encoding = 'utf-8'
 
+    @validator('MAX_SEARCH_PERIOD', pre=True)
+    def validate_max_search_period(cls, v):
+        if isinstance(v, str):
+            try:
+                return int(v)
+            except ValueError:
+                return 30  # valor padrão se a conversão falhar
+        return v
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         logger.info("Configurações de API carregadas")
         logger.debug(f"Configurações: {self.dict()}")
+
+    def get_max_search_period_timedelta(self) -> timedelta:
+        """Retorna o período máximo de busca como timedelta"""
+        return timedelta(days=self.MAX_SEARCH_PERIOD)
