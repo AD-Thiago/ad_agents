@@ -1965,16 +1965,8 @@ class NewsApiConfig(BaseSettings):
     
     # Limites
     DEFAULT_MAX_RESULTS: int = Field(50, env='NEWS_DEFAULT_MAX_RESULTS')
-    MAX_SEARCH_PERIOD: int = Field(
-<<<<<<< HEAD
-        default=30,
-        description="Maximum search period in days",
-        env='NEWS_MAX_SEARCH_PERIOD',
-        ge=1
-=======
-        default=30,  # 30 dias por padrão
-        env='NEWS_MAX_SEARCH_PERIOD'
->>>>>>> c2e907e984780e4c16c1d1821aac68192b6276ca
+    MAX_SEARCH_PERIOD: timedelta = Field(
+        default_factory=lambda: timedelta(days=int(os.getenv('NEWS_MAX_SEARCH_PERIOD', '30'))),
     )
     
     # Configurações de fontes
