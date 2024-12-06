@@ -2,7 +2,8 @@ import os
 import mimetypes
 
 # Define os arquivos e diretórios a serem excluídos
-EXCLUDE = ["venv", "__pycache__", ".git", ".env", "README.md", "generate_readme.py"]
+EXCLUDE = ["venv", "__pycache__", ".git", ".env", "README.md", "generate_readme.py", "docker-compose.yml", "requirements.txt", "setup.py","Dockerfile","pyproject.toml",
+           ".gitignore",".pytest_cache","build","ad_agents.egg-info"]
 
 # Caminho para salvar o README
 README_PATH = "README.md"
