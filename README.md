@@ -5,6 +5,8 @@ Este README foi gerado automaticamente para documentar a estrutura do projeto.
 # Índice
 
 - [main.py](#main.py)
+- [test_config.py](#test_config.py)
+- [test_settings.py](#test_settings.py)
 - [__init__.py](#__init__.py)
 - [agents\__init__.py](#agents\__init__.py)
 - [agents\action\__init__.py](#agents\action\__init__.py)
@@ -52,27 +54,215 @@ Este README foi gerado automaticamente para documentar a estrutura do projeto.
 - [core\domains\tech_stacks.py](#core\domains\tech_stacks.py)
 - [core\domains\__init__.py](#core\domains\__init__.py)
 - [scripts\start_agent.py](#scripts\start_agent.py)
-- [tests\test_config.py](#tests\test_config.py)
 - [tests\test_content.py](#tests\test_content.py)
 - [tests\test_devto_client.py](#tests\test_devto_client.py)
 - [tests\test_feedback_loop.py](#tests\test_feedback_loop.py)
 - [tests\test_news_integration.py](#tests\test_news_integration.py)
 - [tests\test_orchestrator.py](#tests\test_orchestrator.py)
-- [tests\test_planning.py](#tests\test_planning.py)
+- [tests\test_planning_agent.py](#tests\test_planning_agent.py)
 - [tests\test_review.py](#tests\test_review.py)
-- [tests\test_search.py](#tests\test_search.py)
+- [tests\test_search_agent.py](#tests\test_search_agent.py)
 - [tests\__init__.py](#tests\__init__.py)
 
 
 ## main.py
 
 ```python
-from fastapi import FastAPI 
-app = FastAPI() 
-@app.get("/") 
-def read_root(): 
-    return {"Hello": "AD Agents"} 
+from fastapi import FastAPI, HTTPException, BackgroundTasks
+from pydantic import BaseModel
+from psycopg2 import connect
+from psycopg2.extras import RealDictCursor
+from typing import List, Optional, Dict, Any
+from datetime import datetime
+import asyncio
+from core.config import get_settings
+from agents.search.agent import SearchAgent
+from agents.planning.agent import PlanningAgent
+#from agents.content.agent import ContentAgent
+from agents.review.agent import ReviewAgent
 
+# Configurações
+settings = get_settings()
+app = FastAPI(
+    title="Agents API",
+    description="API para interação com agentes inteligentes",
+    version="1.0.0"
+)
+
+# Modelos de dados para a API
+class SearchRequest(BaseModel):
+    topic: str
+    keywords: List[str]
+    target_audience: str
+    max_results: Optional[int] = 10
+
+class PlanningRequest(BaseModel):
+    topic: str
+    domain: str
+    technical_level: str = "intermediate"
+    content_type: str = "article"
+    target_audience: List[str]
+
+
+# Instâncias dos agentes
+search_agent = SearchAgent()
+planning_agent = PlanningAgent()
+#content_agent = ContentAgent()
+#review_agent = ReviewAgent()
+
+# Endpoint existente para teste de DB
+@app.get("/db-test")
+async def db_test():
+    try:
+        conn = connect(
+            host=settings.DB_HOST,
+            port=settings.DB_PORT,
+            dbname=settings.DB_NAME,
+            user=settings.DB_USER,
+            password=settings.DB_PASSWORD
+        )
+        conn.close()
+        return {"status": "success", "message": "Database connection is working!"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+# Endpoint existente para search agent
+@app.get("/search_agent")
+async def search_agent_endpoint():
+    try:
+        await search_agent.start_consuming()
+        return {"status": "success", "message": "Search agent started successfully"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+# Novos endpoints para teste dos agentes
+@app.post("/api/search", tags=["Search"])
+async def run_search(request: SearchRequest):
+    """Executa busca com o Search Agent"""
+    try:
+        results = await search_agent.enrich_content_plan(
+            topic=request.topic,
+            keywords=request.keywords,
+            target_audience=request.target_audience
+        )
+        return {
+            "status": "success",
+            "timestamp": datetime.now().isoformat(),
+            "results": results
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/plan", tags=["Planning"])
+async def generate_plan(request: PlanningRequest):
+    """Gera plano com o Planning Agent"""
+    try:
+        plan = await planning_agent.generate_plan()
+        return {
+            "status": "success",
+            "timestamp": datetime.now().isoformat(),
+            "plan": plan
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+#@app.post("/api/content", tags=["Content"])
+#async def generate_content(request: ContentRequest):
+#    """Gera conteúdo com o Content Agent"""
+#    try:
+#        content = content_agent.generate_content({
+#            "topic": request.topic,
+#            "keywords": request.keywords,
+#            "target_audience": request.target_audience,
+#           "tone": request.tone,
+#           "seo_guidelines": request.seo_guidelines or {}
+#       })
+#       return {
+#           "status": "success",
+#           "timestamp": datetime.now().isoformat(),
+#            "content": content
+#        }
+#    except Exception as e:
+#        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/status", tags=["System"])
+async def get_system_status():
+    """Verifica status do sistema"""
+    return {
+        "status": "online",
+        "timestamp": datetime.now().isoformat(),
+        "agents": {
+            "search": "running",
+            "planning": "running",
+            "content": "running",
+            "review": "running"
+        }
+    }
+
+# Eventos de inicialização e encerramento
+@app.on_event("startup")
+async def startup_event():
+    """Inicializa os agentes quando a API inicia"""
+    await search_agent.initialize()
+    await planning_agent.initialize()
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Fecha conexões quando a API é encerrada"""
+    await search_agent.close()
+    await planning_agent.close()
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
+```
+
+## test_config.py
+
+```python
+# test_config.py
+from core.config import get_settings
+
+def test_env_loading():
+    settings = get_settings()
+    assert settings.DB_HOST == "localhost"  # Substitua por algum valor do .env
+    assert settings.DB_PORT == 5432         # Confirme se os valores estão corretos
+    print("Todas as variáveis foram carregadas corretamente!")
+
+if __name__ == "__main__":
+    test_env_loading()
+
+```
+
+## test_settings.py
+
+```python
+#import pytest
+from core.config import get_settings
+
+
+def test_settings_load():
+    """Teste para verificar se as configurações carregam corretamente."""
+    settings = get_settings()
+
+    # Teste geral de configuração
+    assert settings.OPENAI_API_KEY is not None, "OPENAI_API_KEY não está carregado!"
+    assert settings.DB_HOST == "localhost", "DB_HOST não está configurado corretamente!"
+    assert settings.DB_PORT == 5432, "DB_PORT não está configurado corretamente!"
+    assert settings.DB_NAME is not None, "DB_NAME não está carregado!"
+    assert settings.DATABASE_URL.startswith("postgresql://"), "DATABASE_URL não foi construída corretamente!"
+
+    # Teste de valores numéricos
+    assert settings.CACHE_TTL > 0, "CACHE_TTL deve ser maior que 0!"
+    assert settings.WORKFLOW_TIMEOUT > 0, "WORKFLOW_TIMEOUT deve ser maior que 0!"
+
+    print("Todas as configurações foram carregadas com sucesso!")
+
+
+if __name__ == "__main__":
+    # Rodar diretamente no terminal
+    test_settings_load()
+    print("Teste concluído com sucesso!")
 ```
 
 ## __init__.py
@@ -84,10 +274,17 @@ def read_root():
 ## agents\__init__.py
 
 ```python
-# agents/__init__.py
-from agents.search.services.news import NewsIntegrationService, NewsArticle, NewsSearchQuery
+from .search.agent import SearchAgent
+from .search.services.news import NewsIntegrationService, NewsArticle, NewsSearchQuery
+from .planning.agent import PlanningAgent  # Importar o PlanningAgent aqui se existir
 
-__all__ = ['NewsIntegrationService', 'NewsArticle', 'NewsSearchQuery']
+__all__ = [
+    'NewsIntegrationService',
+    'NewsArticle',
+    'NewsSearchQuery',
+    'PlanningAgent',
+    'SearchAgent'
+]
 ```
 
 ## agents\action\__init__.py
@@ -103,7 +300,7 @@ from typing import List, Dict
 from datetime import datetime
 from langchain.prompts import PromptTemplate
 from langchain.chains import LLMChain
-from langchain.chat_models import ChatOpenAI
+from langchain_openai import ChatOpenAI 
 from core.rabbitmq_utils import RabbitMQUtils
 from core.models import PlanningGenerated, ContentGenerated, ContentImproved
 from pydantic import ValidationError
@@ -111,6 +308,7 @@ from core.config import get_settings
 import json
 import threading
 import logging
+
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("ContentAgent")
@@ -123,7 +321,7 @@ class ContentAgent:
         self.llm = ChatOpenAI(
             model_name=self.settings.api.openai_model,
             temperature=self.settings.api.openai_temperature,
-            openai_api_key=self.settings.api.openai_api_key
+            openai_api_key= self.settings.api.openai_api_key
         )
         self.rabbitmq = RabbitMQUtils()
         self.setup_chains()
@@ -255,7 +453,7 @@ if __name__ == "__main__":
 
 ```python
 # agents\content\config.py
-from pydantic import BaseSettings
+from pydantic_settings import BaseSettings
 from typing import Dict, List
 
 class ContentAgentConfig(BaseSettings):
@@ -312,6 +510,7 @@ class ContentAgentConfig(BaseSettings):
 ## agents\planning\agent.py
 
 ```python
+# agents/planning/agent.py
 import json
 import threading
 from datetime import datetime
@@ -323,16 +522,20 @@ from core.domains.definitions import DomainManager
 from core.rabbitmq_utils import RabbitMQUtils
 from agents.planning.config import config
 from core.config import get_settings
-from langchain.chat_models import ChatOpenAI
+from langchain_openai import ChatOpenAI
 from langchain.prompts import PromptTemplate
-from langchain.chains import LLMChain
+from langchain.schema.runnable import RunnableMap
+from pydantic import AnyHttpUrl
+import logging
+import asyncio
 
+logger = logging.getLogger(__name__)
 
 class PlanningAgent:
     """Agente de Planejamento Inteligente para Criação de Conteúdos"""
 
     def __init__(self):
-        # Instâncias principais
+        self.config = config
         self.rabbitmq = RabbitMQUtils()
         self.adoption_manager = AdoptionMetricsManager()
         self.seasonality_manager = SeasonalityManager()
@@ -340,20 +543,19 @@ class PlanningAgent:
         self.tech_stack_manager = TechStackManager()
         self.domain_manager = DomainManager()
 
-        # Configuração do LLM
         self.llm = ChatOpenAI(
-            model_name=get_settings().api.openai_model,
-            temperature=config.temperature,
-            max_tokens=config.max_tokens,
-            openai_api_key=get_settings().api.openai_api_key,
+            model_name=get_settings().OPENAI_MODEL,
+            temperature=self.config.temperature,
+            max_tokens=self.config.max_tokens,
+            openai_api_key=self.config.openai_api_key
         )
         self.setup_chain()
 
-        # Evento para controle do loop
         self.stop_event = threading.Event()
+        self.cache = {}
+        self.cache_ttl = self.config.cache_ttl
 
     def setup_chain(self):
-        """Configura o LangChain para planejamento"""
         self.plan_template = PromptTemplate(
             input_variables=["context", "insights"],
             template=(
@@ -367,176 +569,181 @@ class PlanningAgent:
                 "Certifique-se de que o JSON seja válido e bem formatado. Não inclua texto fora do JSON."
             ),
         )
-        self.plan_chain = LLMChain(llm=self.llm, prompt=self.plan_template)
+        self.plan_chain = RunnableMap({
+            "prompt": self.plan_template,
+            "output": self.llm
+        })
 
-    def generate_plan(self):
+    async def generate_plan(self):
         """Gera um plano de conteúdo baseado em insights dos domínios"""
-        print("[LOG] Gerando plano...")
-        insights = []
-
-        # 1. Adicionar insights de frameworks e stacks
+        logger.info("Iniciando a geração do plano de conteúdo")
         try:
-            for framework_id, framework in self.tech_stack_manager.frameworks.items():
-                insights.append(self._generate_framework_insight(framework))
+            insights = await self._get_cached_insights()
+            logger.debug("Insights coletados com sucesso")
+            plan = await self._generate_plan_with_llm(insights)
+            logger.debug("Plano gerado com sucesso")
+            await self._publish_plan(plan)
+            logger.info("Plano publicado na fila")
         except Exception as e:
-            print(f"[ERROR] Falha ao gerar insights de frameworks: {e}")
+            await self._handle_error(e, {"context": "Geração do plano"})
+            logger.error("Erro durante a geração do plano", exc_info=True)
 
-        # 2. Adicionar eventos sazonais
-        try:
-            for event in self.seasonality_manager.get_current_events():
-                insights.append(self._generate_seasonal_insight(event))
-        except Exception as e:
-            print(f"[ERROR] Falha ao gerar insights de eventos sazonais: {e}")
+    async def _get_cached_insights(self):
+        """Obtém insights dos domínios, usando cache se possível"""
+        cache_key = self._get_cache_key()
+        if cache_key in self.cache:
+            if (datetime.now() - self.cache[cache_key]["timestamp"]).seconds < self.cache_ttl:
+                logger.debug("Insights recuperados do cache")
+                return self.cache[cache_key]["insights"]
 
-        # 3. Adicionar métricas de adoção
-        try:
-            for metric_id, metric in self.adoption_manager.metrics.items():
-                insights.append(self._generate_adoption_insight(metric))
-        except Exception as e:
-            print(f"[ERROR] Falha ao gerar insights de métricas de adoção: {e}")
+        logger.debug("Coletando novos insights")
+        adoption_insights = await self._gather_adoption_insights()
+        seasonal_insights = await self._gather_seasonal_insights()
+        market_insights = await self._gather_market_insights()
+        domain_insights = await self._gather_domain_insights()
 
-        # 4. Adicionar segmentos de mercado
-        try:
-            for segment_id, segment in self.market_manager.segments.items():
-                insights.append(self._generate_market_insight(segment))
-        except Exception as e:
-            print(f"[ERROR] Falha ao gerar insights de segmentos de mercado: {e}")
-
-        # 5. Contexto de domínios
-        try:
-            context = {
-                "domains": [domain.name for domain in self.domain_manager.domains.values()],
-                "guidelines": [
-                    self.domain_manager.get_content_guidelines(domain_id)
-                    for domain_id in self.domain_manager.domains.keys()
-                ],
-            }
-        except Exception as e:
-            print(f"[ERROR] Falha ao gerar contexto de domínios: {e}")
-            context = {}
-
-        # Gerar plano com LLM
-        try:
-            response = self.plan_chain.run({"context": json.dumps(context), "insights": json.dumps(insights)})
-            cleaned_response = response.strip("```").strip("json").strip() 
-            print(f"[DEBUG] Resposta limpa do LLM: {cleaned_response}")
-           #print(f"[DEBUG] Resposta do LLM: {response}")
-            plan = json.loads(cleaned_response)
-            # Publicar o plano na fila
-            self.rabbitmq.publish_event("planning.generated", json.dumps(plan))
-            print(f"[LOG] Plano publicado: {plan}")
-        except json.JSONDecodeError as e:
-            print(f"[ERROR] Falha ao decodificar plano gerado: {e}")
-        except Exception as e:
-            print(f"[ERROR] Falha ao gerar plano com LLM: {e}")
-
-    def _generate_framework_insight(self, framework):
-        """Gera insight para frameworks"""
-        return {
-            "type": "framework",
-            "name": framework.name,
-            "category": framework.category,
-            "features": framework.key_features,
-            "use_cases": framework.use_cases,
-            "maturity": framework.maturity,
+        insights = {
+            "_gather_adoption_insights": adoption_insights,
+            "_gather_seasonal_insights": seasonal_insights,
+            "_gather_market_insights": market_insights,
+            "_gather_domain_insights": domain_insights,
         }
+        self.cache[cache_key] = {"insights": insights, "timestamp": datetime.now()}
+        return insights
 
-    def _generate_seasonal_insight(self, event):
-        """Gera insight para eventos sazonais"""
-        return {
-            "type": "seasonal_event",
-            "name": event.name,
-            "impact_level": event.impact_level,
-            "key_themes": event.key_themes,
-            "affected_industries": event.affected_industries,
+    def _get_cache_key(self):
+        """Gera uma chave de cache única"""
+        conf_dict = self.config.model_dump()
+        items = []
+        for k, v in conf_dict.items():
+            if isinstance(v, AnyHttpUrl):
+                v = str(v)
+            val_str = str(v)
+            items.append((k, val_str))
+
+        items = sorted(items, key=lambda x: x[0])
+        return hash(frozenset(items))
+
+    async def _gather_adoption_insights(self):
+        return [self._generate_adoption_insight(metric) for metric in self.adoption_manager.metrics.values()]
+
+    async def _gather_seasonal_insights(self):
+        return [self._generate_seasonal_insight(event) for event in self.seasonality_manager.get_current_events()]
+
+    async def _gather_market_insights(self):
+        return [self._generate_market_insight(segment) for segment in self.market_manager.segments.values()]
+
+    async def _gather_domain_insights(self):
+        context = {
+            "domains": [domain.name for domain in self.domain_manager.domains.values()],
+            "guidelines": [
+                self.domain_manager.get_content_guidelines(domain_id)
+                for domain_id in self.domain_manager.domains.keys()
+            ],
         }
+        return context
 
     def _generate_adoption_insight(self, metric):
-        """Gera insight para métricas de adoção"""
-        return {
-            "type": "adoption_metric",
-            "technology": metric.technology,
-            "growth_rate": metric.growth_rate,
-            "current_stage": metric.current_stage,
-            "market_penetration": metric.market_penetration,
-        }
+        return {"technology": metric.technology, "adoption_rate": metric.adoption_rate}
+
+    def _generate_seasonal_insight(self, event):
+        return {"event": event.name, "impact_level": event.impact_level}
 
     def _generate_market_insight(self, segment):
-        """Gera insight para segmentos de mercado"""
-        return {
-            "type": "market_segment",
-            "name": segment.name,
-            "industry": segment.industry,
-            "technologies": segment.key_technologies,
-            "opportunities": segment.opportunities,
+        return {"segment": segment.name, "priority": str(segment.priority)}
+
+    async def _generate_plan_with_llm(self, insights):
+        """Gera um plano de conteúdo usando o modelo LLM"""
+        context = json.dumps(insights["_gather_domain_insights"])
+        insights_combined = json.dumps(
+            insights["_gather_adoption_insights"] +
+            insights["_gather_seasonal_insights"] +
+            insights["_gather_market_insights"]
+        )
+        result = await self.plan_chain.invoke({"context": context, "insights": insights_combined})
+        return json.loads(result["output"])
+
+    async def _publish_plan(self, plan):
+        """Publica o plano de conteúdo gerado"""
+        try:
+            await self.rabbitmq.publish_event(
+            routing_key="planning.generated",
+            message=plan
+            )
+            logger.info(f"Plano publicado com sucesso")
+
+        except Exception as e:
+            await self._handle_error(e, {"context": "Publicação do plano"})
+            logger.error("Erro durante a publicação do plano", exc_info=True)
+            raise
+
+    async def _handle_error(self, error, context=None):
+        """Trata erros ocorridos durante a execução do Planning Agent"""
+        error_data = {
+            "error": str(error),
+            "context": context or {}
         }
+        await self.rabbitmq.publish_event(
+            routing_key="planning.failed",
+            message=error_data,
+            exchange="workflow.events"
+        )
+        logger.error(f"Erro no Planning Agent: {error_data}", exc_info=True)
 
     def start(self):
         """Inicia o agente de planejamento em um intervalo definido"""
-        print("[LOG] Iniciando loop do agente de planejamento.")
+        logger.info("Iniciando loop do agente de planejamento.")
         while not self.stop_event.is_set():
-            self.generate_plan()
-            self.stop_event.wait(config.planning_interval)
+            asyncio.run(self.generate_plan())
+            self.stop_event.wait(self.config.planning_interval)
 
     def stop(self):
         """Para a execução do thread"""
         self.stop_event.set()
+    
+    async def initialize(self):
+        # Inicializações que você precisar, ou deixe vazio se não for necessário
+        pass
 
-
-if __name__ == "__main__":
-    agent = PlanningAgent()
-    print(f"[{datetime.now()}] Planning Agent iniciado.")
-    try:
-        agent.start()
-    except KeyboardInterrupt:
-        print("[LOG] Finalizando Planning Agent...")
-        agent.stop()
+    async def close(self):
+        # Limpeza de recursos, se necessário, ou apenas pass
+        pass
 ```
 
 ## agents\planning\config.py
 
 ```python
 # agents/planning/config.py
+from pydantic_settings import BaseSettings
+from pydantic import Field
 from core.config import get_settings
-from pydantic import BaseSettings
 
 class PlanningAgentConfig(BaseSettings):
     """
     Configurações para o Planning Agent.
-    Estas definições incluem integrações, parâmetros de geração e limites de métricas.
+    Obtém a OPENAI_API_KEY do get_settings().
     """
+    openai_api_key: str = Field(default_factory=lambda: get_settings().OPENAI_API_KEY)
 
-    # OpenAI
-    settings = get_settings()
-    openai_api_key: str = settings.api.openai_api_key
+    temperature: float = Field(0.7, env="PLANNING_TEMPERATURE")
+    max_tokens: int = Field(1500, env="PLANNING_MAX_TOKENS")
+    planning_interval: int = Field(120, env="PLANNING_INTERVAL")
 
-    # Parâmetros do agente
-    temperature: float = 0.7  # Criatividade do modelo
-    max_tokens: int = 1500  # Limite de tokens para geração de conteúdo
-    planning_interval: int = 120  # Intervalo de planejamento (em segundos)
+    min_trend_score: float = Field(0.5, env="PLANNING_MIN_TREND_SCORE")
+    min_relevance_score: float = Field(0.6, env="PLANNING_MIN_RELEVANCE_SCORE")
+    min_confidence_score: float = Field(0.7, env="PLANNING_MIN_CONFIDENCE_SCORE")
 
-    # Limiares para métricas e relevância
-    min_trend_score: float = 0.5  # Score mínimo para considerar uma tendência
-    min_relevance_score: float = 0.6  # Relevância mínima para incluir no plano
-    min_confidence_score: float = 0.7  # Confiança mínima para publicar
+    cache_ttl: int = Field(1800, env="PLANNING_CACHE_TTL")
 
-    # Configurações de cache
-    cache_ttl: int = 1800  # Tempo de vida do cache (em segundos)
+    enable_domain_flexibility: bool = Field(True, env="PLANNING_ENABLE_DOMAIN_FLEXIBILITY")
+    default_domain_priority: str = Field("medium", env="PLANNING_DEFAULT_DOMAIN_PRIORITY")
 
-    # Domínios
-    enable_domain_flexibility: bool = True  # Permite criar planos fora de domínios pré-definidos
-    default_domain_priority: str = "medium"  # Prioridade padrão para planos fora de domínios
-
-    # Configurações de publicação
-    publishing_frequency: str = "daily"  # Frequência de publicação (daily, weekly, monthly)
+    publishing_frequency: str = Field("daily", env="PLANNING_PUBLISHING_FREQUENCY")
 
     class Config:
-        env_prefix = "PLANNING_"  # Prefixo para variáveis de ambiente
+        env_prefix = "PLANNING_"
 
-
-# Instância global de configuração para facilitar o uso
 config = PlanningAgentConfig()
-
 ```
 
 ## agents\planning\models.py
@@ -629,7 +836,7 @@ from core.rabbitmq_utils import RabbitMQUtils
 from .services.validation import PlanningValidator
 from .services.insights import InsightService
 from .models import PlanningRequest, PlanningResponse, ContentStrategy
-from langchain.chat_models import ChatOpenAI
+from langchain_openai import ChatOpenAI
 from langchain.prompts import PromptTemplate
 from langchain.chains import LLMChain
 from core.config import get_settings
@@ -1000,9 +1207,9 @@ class PlanningValidator:
 
 ```python
 from typing import Dict, List
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field 
 from datetime import datetime
-from langchain.chat_models import ChatOpenAI
+from langchain_openai import ChatOpenAI
 from langchain.chains import LLMChain
 from langchain.prompts import PromptTemplate
 from core.rabbitmq_utils import RabbitMQUtils
@@ -1140,7 +1347,8 @@ class ReviewAgent:
 
 ```python
 # agents/review/config.py
-from pydantic import BaseSettings, Field
+from pydantic import Field
+from pydantic_settings import BaseSettings
 from typing import Dict, List
 
 class ReviewAgentConfig(BaseSettings):
@@ -1193,139 +1401,89 @@ class ReviewAgentConfig(BaseSettings):
 ## agents\search\agent.py
 
 ```python
-from typing import Dict, List, Optional, Any
-from pydantic import BaseModel, Field
-from datetime import datetime, timedelta
+# agents/search/agent.py
 import asyncio
-import numpy as np
-from langchain.embeddings import HuggingFaceEmbeddings
-from langchain.vectorstores import FAISS
+import json
+import logging
+from datetime import datetime
+from typing import Any, Dict, List, Optional
+import aiohttp
+from pydantic import BaseModel, Field
+from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_community.vectorstores import FAISS
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from core.rabbitmq_utils import RabbitMQUtils
 from core.config import get_settings
-import json
-import time
-from .services.news.metrics import NewsMetrics
-import aiohttp
+from agents.planning.config import config
 from .services.news.clients.hackernews import HackerNewsClient
 from .services.news.clients.techcrunch import TechCrunchClient
 from .services.news.clients.devto import DevToClient
 from .services.news.config import NewsApiConfig
-import logging
+from .services.news.metrics import NewsMetrics
 
 logger = logging.getLogger(__name__)
 
-class SearchResult(BaseModel):
-    """Modelo para resultados de busca"""
-    title: str
-    url: str
-    author: str
-    source: str
-    published_date: datetime
-    summary: str
-    tags: List[str]
-    metadata: Dict[str, Any] = Field(default_factory=dict)
-    relevance_score: float
-
-class ContentValidation(BaseModel):
-    """Modelo para validação de conteúdo"""
-    claim: str
-    is_valid: bool
-    confidence_score: float
-    supporting_sources: List[str]
-    suggestions: Optional[List[str]]
-
-class AudienceInsight(BaseModel):
-    """Modelo para insights sobre audiência"""
-    preferences: List[str]
-    pain_points: List[str]
-    technical_level: str
-    common_questions: List[str]
-    preferred_formats: List[str]
-
-class SEOInsight(BaseModel):
-    """Modelo para insights de SEO"""
-    primary_keywords: List[tuple]  # (keyword, volume)
-    related_keywords: List[tuple]
-    questions: List[str]
-    competing_content: List[Dict]
-    suggested_structure: Dict[str, Any]
-
-class EnhancedSearchAgent:
-    """Agente de busca aprimorado com múltiplas funcionalidades"""
+class SearchAgent:
+    """Agente de busca com múltiplas funcionalidades"""
 
     def __init__(self):
-        self.settings = get_settings()
+        self.config = config
+        #self.settings = get_settings()
         self.rabbitmq = RabbitMQUtils()
-        self.embeddings = HuggingFaceEmbeddings(
-            model_name="sentence-transformers/all-mpnet-base-v2"
-        )
-        self.text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=1000,
-            chunk_overlap=200
-        )
-        self.setup_vector_store()
-        self.setup_cache()
+        self.embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-mpnet-base-v2")
+        self.text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+        self.vector_store = self.setup_vector_store()
+        self.cache = {}
+        self.cache_ttl = 3600  # Cache com 1 hora de TTL
         self.metrics = NewsMetrics()
         self.news_config = NewsApiConfig()
-        self.session = None  # Sessão será inicializada no método initialize
+        self.session = None
         self.hacker_news_client = None
         self.tech_crunch_client = None
         self.dev_to_client = None
 
     async def initialize(self):
-        """Inicializa o agente de pesquisa"""
-        logger.info("Inicializando o agente de pesquisa")
+        """Inicializa o agente de pesquisa e configura os clientes"""
+        logger.info("Inicializando o agente de pesquisa...")
         if not self.session:
-        
-            logger.info("Inicializando sessão HTTP para o agente de pesquisa")
             self.session = aiohttp.ClientSession()
 
-        # Passar a sessão para os clientes ao inicializá-los
-        self.hacker_news_client = HackerNewsClient(
-            api_url=self.news_config.HACKER_NEWS_API_URL,
-            session=self.session
-            )
-    
-        self.tech_crunch_client = TechCrunchClient(
-            base_url="https://techcrunch.com",
-            session=self.session
-            )
-    
-        self.dev_to_client = DevToClient(
-            api_url=self.news_config.DEVTO_API_URL,
-            api_key=self.news_config.DEVTO_API_KEY,
-            session=self.session
-        )
+        # Configuração dos clientes com a sessão
+        self.hacker_news_client = HackerNewsClient(api_url=self.news_config.HACKER_NEWS_API_URL, session=self.session)
+        self.tech_crunch_client = TechCrunchClient(base_url="https://techcrunch.com", session=self.session)
+        self.dev_to_client = DevToClient(api_url=self.news_config.DEVTO_API_URL, api_key=self.news_config.DEVTO_API_KEY, session=self.session)
 
- 
     async def close(self):
         """Fecha conexões do agente de pesquisa"""
-        logger.info("Fechando conexões do agente de pesquisa")
-        # Os clientes não precisam de close pois a sessão é compartilhada
+        logger.info("Fechando conexões do agente de pesquisa...")
         if self.session:
             await self.session.close()
             self.session = None
-            
+
     def setup_vector_store(self):
-        """Configura armazenamento vetorial"""
-        logger.info("Configurando armazenamento vetorial")
-        self.vector_store = FAISS.from_texts(
+        """Configura o armazenamento vetorial"""
+        logger.info("Configurando armazenamento vetorial...")
+        return FAISS.from_texts(
             texts=["inicialização do índice"],
             embedding=self.embeddings,
             metadatas=[{"source": "initialization"}]
         )
 
-    def setup_cache(self):
-        """Configura sistema de cache"""
-        logger.info("Configurando sistema de cache")
-        self.cache = {}
-        self.cache_ttl = 3600  # 1 hora
+    async def start_consuming(self):
+        """Inicia consumo de mensagens do RabbitMQ"""
+        async def process_message(message: Dict[str, Any]):
+            logger.info(f"Mensagem recebida: {message}")
+            enriched_data = await self.enrich_content_plan(
+                topic=message.get("topic", ""),
+                keywords=message.get("keywords", []),
+                target_audience=message.get("target_audience", "")
+            )
+            self.rabbitmq.publish_event("search.results", json.dumps(enriched_data, default=str))
+
+        await self.rabbitmq.consume_event("planning.generated", process_message)
 
     async def enrich_content_plan(self, topic: str, keywords: List[str], target_audience: str) -> Dict:
-        """
-        Enriquece o plano de conteúdo com pesquisas e análises
-        """
+        """Enriquece o plano de conteúdo"""
         logger.info(f"Enriquecendo plano de conteúdo para o tópico: {topic}")
         tasks = [
             self.search_recent_developments(topic),
@@ -1334,9 +1492,7 @@ class EnhancedSearchAgent:
             self.gather_seo_insights(keywords),
             self.analyze_audience_preferences(target_audience)
         ]
-
         results = await asyncio.gather(*tasks)
-
         return {
             "recent_developments": results[0],
             "technical_validations": results[1],
@@ -1345,163 +1501,33 @@ class EnhancedSearchAgent:
             "audience_insights": results[4]
         }
 
-    # agents/search/agent.py
+    async def search_recent_developments(self, topic: str) -> List[Dict]:
+        """Busca desenvolvimentos recentes sobre o tópico"""
+        logger.info(f"Buscando desenvolvimentos recentes sobre: {topic}")
+        # Implementação do método aqui
+        return []
 
-    async def search_recent_developments(self, topic: str) -> List[SearchResult]:
-        """
-        Busca desenvolvimentos recentes sobre o tópico
-        """
-        logger.info(f"Buscando desenvolvimentos recentes sobre o tópico: {topic}")
-    
-        # Integração com a API do Hacker News
-        async with self.metrics.track_request("hacker_news"):
-            logger.info("Buscando artigos no Hacker News")
-            hacker_news_results = await self.hacker_news_client.search(topic)  # Removido self.session
-            logger.debug(f"Resultados do Hacker News: {hacker_news_results}")
-
-    # Integração com a API do TechCrunch
-        async with self.metrics.track_request("tech_crunch"):
-            logger.info("Buscando artigos no TechCrunch")
-            tech_crunch_results = await self.tech_crunch_client.search_articles(topic)
-            logger.debug(f"Resultados do TechCrunch: {tech_crunch_results}")
-
-    # Integração com a API do Dev.to
-        async with self.metrics.track_request("dev_to"):
-            logger.info("Buscando artigos no Dev.to")
-            dev_to_results = await self.dev_to_client.search_articles(topic)
-            logger.debug(f"Resultados do Dev.to: {dev_to_results}")
-
-    # Combinar resultados de todas as fontes
-        return hacker_news_results + tech_crunch_results + dev_to_results
-        
-    async def validate_technical_aspects(self, topic: str) -> List[ContentValidation]:
-        """
-        Valida aspectos técnicos do tópico
-        """
-        logger.info(f"Validando aspectos técnicos do tópico: {topic}")
-        # Implementar validação contra fontes técnicas confiáveis
-        async with self.metrics.track_request("technical_validation"):
-            return [
-                    ContentValidation(
-                    claim=f"Validação técnica para {topic}",
-                    is_valid=True,
-                    confidence_score=0.85,
-                    supporting_sources=["docs.python.org"],
-                    suggestions=["Adicionar mais exemplos práticos"]
-                )
-            ]
-
-    async def analyze_similar_content(self, topic: str, keywords: List[str]) -> Dict:
-        """
-        Analisa conteúdo similar existente
-        """
-        logger.info(f"Analisando conteúdo similar para o tópico: {topic}")
-        results = await self._search_vector_store(topic)
-
-        # Análise de gaps e oportunidades
-        return {
-            "similar_content": results,
-            "content_gaps": ["Gap 1", "Gap 2"],
-            "unique_angles": ["Ângulo 1", "Ângulo 2"]
-        }
-
-    async def gather_seo_insights(self, keywords: List[str]) -> SEOInsight:
-        """
-        Coleta insights de SEO
-        """
-        logger.info(f"Coletando insights de SEO para as palavras-chave: {keywords}")
-        # Implementar integração com APIs de SEO
-        async with self.metrics.track_request("seo_insights"):
-            return SEOInsight(
-                primary_keywords=[("python", 1000)],
-                related_keywords=[("python programming", 800)],
-                questions=["How to learn Python?"],
-                competing_content=[],
-                suggested_structure={
-                    "introduction": ["key_point_1", "key_point_2"],
-                    "main_sections": ["section_1", "section_2"],
-                    "conclusion": ["summary", "next_steps"]
-                }
-            )
-
-    async def analyze_audience_preferences(self, target_audience: str) -> AudienceInsight:
-        """
-        Analisa preferências da audiência
-        """
-        logger.info(f"Analisando preferências da audiência: {target_audience}")
-        async with self.metrics.track_request("audience_analysis"):
-            return AudienceInsight(
-                preferences=["Clear explanations", "Code examples"],
-                pain_points=["Complex documentation", "Lack of examples"],
-                technical_level="intermediate",
-                common_questions=["How to start?", "Best practices?"],
-                preferred_formats=["Tutorials", "How-to guides"]
-            )
-
-    async def _search_vector_store(self, query: str) -> List[SearchResult]:
-        """
-        Realiza busca no armazenamento vetorial
-        """
-        logger.info(f"Realizando busca no armazenamento vetorial com o termo: {query}")
-        query_embedding = self.embeddings.embed_query(query)
-        results = self.vector_store.similarity_search_with_score(query, k=5)
-
-        return [
-            SearchResult(
-                content=result[0].page_content,
-                source="vector_store",
-                relevance_score=float(result[1]),
-                metadata=result[0].metadata
-            )
-            for result in results
-        ]
-
-    async def index_content(self, content: str, metadata: Dict[str, Any]):
-        """
-        Indexa novo conteúdo no armazenamento vetorial
-        """
-        logger.info("Indexando novo conteúdo no armazenamento vetorial")
-        chunks = self.text_splitter.split_text(content)
-        chunk_metadatas = [metadata for _ in chunks]
-        self.vector_store.add_texts(chunks, metadatas=chunk_metadatas)
-
-    async def start_consuming(self):
-        """
-        Inicia consumo de mensagens do RabbitMQ
-        """
-        def callback(ch, method, properties, body):
-            message = json.loads(body)
-            logger.info(f"Mensagem recebida: {message}")
-
-            # Processar mensagem e enriquecer conteúdo
-            enriched_data = asyncio.run(self.enrich_content_plan(
-                topic=message.get("topic", ""),
-                keywords=message.get("keywords", []),
-                target_audience=message.get("target_audience", "")
-            ))
-
-            # Publicar resultados enriquecidos
-            self.rabbitmq.publish_event(
-                "search.results",
-                json.dumps(enriched_data, default=str)
-            )
-
-        self.rabbitmq.consume_event("planning.generated", callback)
-
+# Configuração básica de logs e inicialização
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    agent = EnhancedSearchAgent()
-    logger.info("Search Agent iniciado. Aguardando mensagens...")
-    asyncio.run(agent.start_consuming())
+    agent = SearchAgent()
+    try:
+        asyncio.run(agent.start_consuming())
+    except KeyboardInterrupt:
+        logger.info("Encerrando o Search Agent.")
+        asyncio.run(agent.close())
+
 ```
 
 ## agents\search\config.py
 
 ```python
 # agents/search/config.py
-
 from typing import Dict, List, Optional
-from pydantic import BaseSettings, Field, HttpUrl
+from pydantic import Field
+from pydantic_settings import BaseSettings
+from typing import Any
+
 
 class SearchAgentConfig(BaseSettings):
     """Configurações avançadas para o Search Agent"""
@@ -1636,10 +1662,10 @@ config = SearchAgentConfig()
 ## agents\search\__init__.py
 
 ```python
-from .agent import EnhancedSearchAgent
+from .agent import SearchAgent
 from .services.news import NewsIntegrationService, NewsArticle, NewsSearchQuery
 
-__all__ = ['EnhancedSearchAgent', 'NewsIntegrationService', 'NewsArticle', 'NewsSearchQuery']
+__all__ = ['SearchAgent', 'NewsIntegrationService', 'NewsArticle', 'NewsSearchQuery']
 ```
 
 ## agents\search\services\news_integration.py
@@ -1915,7 +1941,8 @@ class NewsCache:
 ## agents\search\services\news\config.py
 
 ```python
-from pydantic import BaseSettings, Field, validator
+from pydantic import Field, field_validator
+from pydantic_settings import BaseSettings
 from typing import Dict, List, Optional
 from datetime import timedelta
 from pathlib import Path
@@ -1985,7 +2012,8 @@ class NewsApiConfig(BaseSettings):
         env_file = ".env"
         env_file_encoding = 'utf-8'
 
-    @validator('MAX_SEARCH_PERIOD', pre=True)
+    @field_validator('MAX_SEARCH_PERIOD')
+    @classmethod
     def validate_max_search_period(cls, v):
         if isinstance(v, str):
             try:
@@ -2808,83 +2836,79 @@ class RateLimiter:
 ## core\config.py
 
 ```python
-# File: core/config.py
-
-from pydantic import BaseSettings, Field
-from typing import Dict, Optional
-import os
-from dotenv import load_dotenv
-
-# Carregar variáveis de ambiente do .env
-load_dotenv()
+# core/config.py
+from pydantic_settings import BaseSettings
+from pydantic import Field, AnyHttpUrl, field_validator
+from urllib.parse import quote_plus
 
 class Settings(BaseSettings):
     """Configurações globais da aplicação"""
 
-    # API
-    OPENAI_API_KEY: str = Field(..., env='OPENAI_API_KEY')
-    OPENAI_MODEL: str = Field('gpt-4-1106', env='OPENAI_MODEL')
-    OPENAI_TEMPERATURE: float = Field(0.7, env='OPENAI_TEMPERATURE')
+    # API OpenAI
+    OPENAI_API_KEY: str = Field(..., env="OPENAI_API_KEY")
+    OPENAI_MODEL: str = Field("gpt-4-1106", env="OPENAI_MODEL")
+    OPENAI_TEMPERATURE: float = Field(0.7, env="OPENAI_TEMPERATURE")
+
+    # Pinecone
+    PINECONE_API_KEY: str = Field(..., env="PINECONE_API_KEY")
+    PINECONE_ENVIRONMENT: str = Field(..., env="PINECONE_ENVIRONMENT")
+    PINECONE_INDEX_NAME: str = Field(..., env="PINECONE_INDEX_NAME")
+
+    # HuggingFace
+    HF_API_KEY: str = Field(..., env="HF_API_KEY")
+    HF_MODEL: str = Field("sentence-transformers/all-mpnet-base-v2", env="HF_MODEL")
+
+    # Database
+    DB_HOST: str = Field("localhost", env="DB_HOST")
+    DB_PORT: int = Field(5432, env="DB_PORT")
+    DB_NAME: str = Field(..., env="DB_NAME")
+    DB_USER: str = Field(..., env="DB_USER")
+    DB_PASSWORD: str = Field(..., env="DB_PASSWORD")
+
+    @property
+    def DATABASE_URL(self) -> str:
+        """Constrói dinamicamente a URL do banco de dados"""
+        return (
+            f"postgresql://{quote_plus(self.DB_USER)}:{quote_plus(self.DB_PASSWORD)}"
+            f"@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"
+        )
 
     # RabbitMQ
-    RABBITMQ_HOST: str = Field('localhost', env='RABBITMQ_HOST')
-    RABBITMQ_PORT: int = Field(5672, env='RABBITMQ_PORT')
-    RABBITMQ_USER: str = Field('guest', env='RABBITMQ_USER')
-    RABBITMQ_PASSWORD: str = Field('guest', env='RABBITMQ_PASSWORD')
-
-    # Métricas
-    PROMETHEUS_HOST: str = Field('localhost', env='PROMETHEUS_HOST')
-    PROMETHEUS_PORT: int = Field(9090, env='PROMETHEUS_PORT')
+    RABBITMQ_HOST: str = Field("localhost", env="RABBITMQ_HOST")
+    RABBITMQ_PORT: int = Field(5672, env="RABBITMQ_PORT")
+    RABBITMQ_USER: str = Field("guest", env="RABBITMQ_USER")
+    RABBITMQ_PASSWORD: str = Field("guest", env="RABBITMQ_PASSWORD")
+    RABBITMQ_USE_SSL: bool = Field(False, env="RABBITMQ_USE_SSL")
 
     # APIs Externas
-    HACKER_NEWS_API_URL: str = Field('http://hn.algolia.com/api/v1', env='HACKER_NEWS_API_URL')
-    DEV_TO_API_KEY: str = Field('', env='DEV_TO_API_KEY')
-    DEV_TO_API_URL: str = Field('https://dev.to/api', env='DEV_TO_API_URL')
+    DEV_TO_API_KEY: str = Field(..., env="DEV_TO_API_KEY")
+    DEV_TO_API_URL: AnyHttpUrl = Field("https://dev.to/api", env="DEV_TO_API_URL")
+    HACKER_NEWS_API_URL: AnyHttpUrl = Field("http://hn.algolia.com/api/v1", env="HACKER_NEWS_API_URL")
 
     # Workflow
-    WORKFLOW_TIMEOUT: int = Field(3600, env='WORKFLOW_TIMEOUT')  # 1 hora
-    MAX_RETRIES: int = Field(3, env='MAX_RETRIES')
-    RETRY_DELAY: int = Field(5, env='RETRY_DELAY')  # segundos
+    WORKFLOW_TIMEOUT: int = Field(3600, env="WORKFLOW_TIMEOUT")
+    MAX_RETRIES: int = Field(3, env="MAX_RETRIES")
+    RETRY_DELAY: int = Field(5, env="RETRY_DELAY")
 
     # Cache
-    CACHE_TTL: int = Field(3600, env='CACHE_TTL')  # 1 hora
-    MAX_CACHE_SIZE: int = Field(1000, env='MAX_CACHE_SIZE')
-
-    # Domínios
-    DOMAIN_CONFIGS: Dict[str, Dict] = Field({
-        'technology': {
-            'name': 'Technology',
-            'content_guidelines': "Conteúdo técnico, atualizado e com aplicabilidade prática.",
-            'priority': 'high'
-        },
-        'business': {
-            'name': 'Business',
-            'content_guidelines': "Conteúdo focado em estratégia, finanças e gestão empresarial.",
-            'priority': 'medium'
-        },
-        'lifestyle': {
-            'name': 'Lifestyle',
-            'content_guidelines': "Conteúdo sobre bem-estar, saúde, hobbies e desenvolvimento pessoal.",
-            'priority': 'low'
-        }
-    }, env='DOMAIN_CONFIGS')
-
-    # Validação
-    VALIDATION_THRESHOLDS: Dict[str, float] = Field({
-        'content_quality': 0.8,
-        'relevance': 0.7,
-        'plagiarism': 0.9,
-        'technical_accuracy': 0.85
-    }, env='VALIDATION_THRESHOLDS')
+    CACHE_TTL: int = Field(3600, env="CACHE_TTL")
+    MAX_CACHE_SIZE: int = Field(10000, env="MAX_CACHE_SIZE")
 
     # Planning
-    PLANNING_MIN_INSIGHTS: int = Field(5, env='PLANNING_MIN_INSIGHTS')
-    PLANNING_MAX_TOPICS: int = Field(3, env='PLANNING_MAX_TOPICS')
-    PLANNING_UPDATE_INTERVAL: int = Field(3600, env='PLANNING_UPDATE_INTERVAL')  # 1 hora
+    PLANNING_MIN_INSIGHTS: int = Field(5, env="PLANNING_MIN_INSIGHTS")
+    PLANNING_MAX_TOPICS: int = Field(3, env="PLANNING_MAX_TOPICS")
+    PLANNING_UPDATE_INTERVAL: int = Field(3600, env="PLANNING_UPDATE_INTERVAL")
 
-    class Config:
-        env_file = '.env'
-        env_file_encoding = 'utf-8'
+    # Segurança e Logs
+    LOG_LEVEL: str = Field("INFO", env="LOG_LEVEL")
+    DEBUG_MODE: bool = Field(False, env="DEBUG_MODE")
+
+    # Validadores para valores positivos
+    @field_validator("CACHE_TTL", "WORKFLOW_TIMEOUT", "RETRY_DELAY")
+    def validate_positive(cls, value):
+        if value <= 0:
+            raise ValueError("Os valores devem ser maiores que 0.")
+        return value
 
 def get_settings() -> Settings:
     """Obtém as configurações globais da aplicação"""
@@ -3466,7 +3490,55 @@ class WorkflowManager:
 ## core\__init__.py
 
 ```python
+# core/__init__.py
 
+from .config import get_settings
+from .constants import *
+from .rabbitmq_utils import RabbitMQUtils
+from .workflow import WorkflowManager
+from .domains import *
+
+__all__ = [
+    'get_settings',
+    'WorkflowStatus',
+    'AgentType',
+    'Priority',
+    'EventType',
+    'MetricType',
+    'DEFAULT_HEADERS',
+    'RETRY_CONFIG',
+    'TIMEOUTS',
+    'RabbitMQUtils',
+    'WorkflowManager',
+    # Importações do core.domains
+    'AdoptionMetricsManager',
+    'AdoptionMetric',
+    'ROIMetric',
+    'UseCaseMetric',
+    'BigTechMonitor',
+    'BigTechCompany',
+    'Innovation',
+    'CompanyCategory',
+    'DomainManager',
+    'DomainDefinition',
+    'DomainType',
+    'ContentType',
+    'ExpertiseLevel',
+    'UpdateFrequency',
+    'ValidationRule',
+    'MarketSegmentManager',
+    'MarketSegment',
+    'MarketPriority',
+    'Industry',
+    'SeasonalityManager',
+    'SeasonalEvent',
+    'SeasonType',
+    'TechStackManager',
+    'TechStack',
+    'Framework',
+    'TechCategory',
+    'MaturityLevel'
+]
 ```
 
 ## core\domains\adoption_metrics.py
@@ -5226,50 +5298,41 @@ if __name__ == "__main__":
 ```python
 # core/domains/__init__.py
 
+from .adoption_metrics import AdoptionMetricsManager, AdoptionMetric, ROIMetric, UseCaseMetric
+from .bigtech_monitor import BigTechMonitor, BigTechCompany, Innovation, CompanyCategory
+from .definitions import DomainManager, DomainDefinition, DomainType, ContentType, ExpertiseLevel, UpdateFrequency, ValidationRule
 from .market_segments import MarketSegmentManager, MarketSegment, MarketPriority, Industry
 from .seasonality import SeasonalityManager, SeasonalEvent, SeasonType
 from .tech_stacks import TechStackManager, TechStack, Framework, TechCategory, MaturityLevel
-from .bigtech_monitor import BigTechMonitor, BigTechCompany, Innovation, CompanyCategory
-from .adoption_metrics import AdoptionMetricsManager, AdoptionMetric, ROIMetric, UseCaseMetric
-from .definitions import DomainManager, DomainDefinition, DomainType, ContentType, ValidationRule
 
 __all__ = [
-   # Market Segments
-   'MarketSegmentManager',
-   'MarketSegment',
-   'MarketPriority',
-   'Industry',
-   
-   # Seasonality
-   'SeasonalityManager',
-   'SeasonalEvent',
-   'SeasonType',
-   
-   # Tech Stacks
-   'TechStackManager',
-   'TechStack',
-   'Framework', 
-   'TechCategory',
-   'MaturityLevel',
-   
-   # BigTech Monitor
-   'BigTechMonitor',
-   'BigTechCompany',
-   'Innovation',
-   'CompanyCategory',
-   
-   # Adoption Metrics
-   'AdoptionMetricsManager',
-   'AdoptionMetric',
-   'ROIMetric',
-   'UseCaseMetric',
-   
-   # Definitions
-   'DomainManager',
-   'DomainDefinition',
-   'DomainType',
-   'ContentType',
-   'ValidationRule'
+    'AdoptionMetricsManager',
+    'AdoptionMetric',
+    'ROIMetric',
+    'UseCaseMetric',
+    'BigTechMonitor',
+    'BigTechCompany',
+    'Innovation',
+    'CompanyCategory',
+    'DomainManager',
+    'DomainDefinition',
+    'DomainType',
+    'ContentType',
+    'ExpertiseLevel',
+    'UpdateFrequency',
+    'ValidationRule',
+    'MarketSegmentManager',
+    'MarketSegment',
+    'MarketPriority',
+    'Industry',
+    'SeasonalityManager',
+    'SeasonalEvent',
+    'SeasonType',
+    'TechStackManager',
+    'TechStack',
+    'Framework',
+    'TechCategory',
+    'MaturityLevel'
 ]
 ```
 
@@ -5292,10 +5355,14 @@ logger = logging.getLogger(__name__)
 
 async def start_agent(agent_type: str):
     """Inicia um agente específico"""
+    agent = None  # Inicializar para evitar UnboundLocalError
     try:
         # Importar dinamicamente o agente
         module = import_module(f'agents.{agent_type}.agent')
-        agent_class = getattr(module, f'{agent_type.capitalize()}Agent')
+        agent_class = getattr(module, f'{agent_type.capitalize()}Agent', None)
+        
+        if not agent_class:
+            raise ImportError(f"Classe {agent_type.capitalize()}Agent não encontrada no módulo agents.{agent_type}.agent")
         
         # Instanciar e iniciar agente
         agent = agent_class()
@@ -5307,8 +5374,11 @@ async def start_agent(agent_type: str):
             
     except KeyboardInterrupt:
         logger.info(f"Encerrando {agent_type} agent...")
+    except ImportError as e:
+        logger.error(f"Erro ao importar agente: {str(e)}", exc_info=True)
+        raise
     except Exception as e:
-        logger.error(f"Erro fatal: {str(e)}")
+        logger.error(f"Erro fatal ao iniciar o agente '{agent_type}': {str(e)}", exc_info=True)
         raise
     finally:
         if agent:
@@ -5320,17 +5390,6 @@ if __name__ == "__main__":
     args = parser.parse_args()
     
     asyncio.run(start_agent(args.agent))
-```
-
-## tests\test_config.py
-
-```python
-# test_config.py
-from core.config import get_settings
-
-settings = get_settings()
-print(f"OpenAI Key: {'*' * len(settings.api.openai_api_key)}")
-print(f"Pinecone Key: {'*' * len(settings.api.pinecone_api_key)}")
 ```
 
 ## tests\test_content.py
@@ -6049,37 +6108,63 @@ if __name__ == "__main__":
     asyncio.run(run_all_tests())
 ```
 
-## tests\test_planning.py
+## tests\test_planning_agent.py
 
 ```python
-# tests\test_planning.py
-import asyncio
+# tests/test_planning_agent.py
+import unittest
+from unittest.mock import AsyncMock, patch
 from agents.planning.agent import PlanningAgent
-from agents.planning.config import PlanningAgentConfig
-from core.config import get_settings
 
-settings = get_settings()
+class TestPlanningAgent(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.agent = PlanningAgent()
+        self.mock_insights = {
+            "_gather_adoption_insights": [{"type": "adoption_metric", "technology": "Tech1"}],
+            "_gather_seasonal_insights": [{"type": "seasonal_metric", "season": "Spring"}],
+            "_gather_market_insights": [{"type": "market_metric", "market": "Market1"}],
+            "_gather_domain_insights": {"domain": "example.com"},
+        }
 
-async def test_planning():
-    # Carrega configurações
-    config = PlanningAgentConfig()
-    
-    # Inicializa agente
-    agent = PlanningAgent()
-    
-    # Gera plano
-    plan = await agent.generate_content_plan()
-    
-    print("Plano gerado:")
-    for item in plan:
-        print(f"\nTópico: {item.topic}")
-        print(f"Keywords: {item.keywords}")
-        print(f"Público: {item.target_audience}")
-        print(f"Prioridade: {item.priority}")
-        print(f"Impacto estimado: {item.estimated_impact}")
+    async def test_get_cached_insights_first_call(self):
+        with patch.object(self.agent, '_gather_adoption_insights', return_value=self.mock_insights["_gather_adoption_insights"]), \
+             patch.object(self.agent, '_gather_seasonal_insights', return_value=self.mock_insights["_gather_seasonal_insights"]), \
+             patch.object(self.agent, '_gather_market_insights', return_value=self.mock_insights["_gather_market_insights"]), \
+             patch.object(self.agent, '_gather_domain_insights', return_value=self.mock_insights["_gather_domain_insights"]):
+            insights = await self.agent._get_cached_insights()
+            self.assertDictEqual(insights, self.mock_insights)
 
-if __name__ == "__main__":
-    asyncio.run(test_planning())
+    async def test_generate_plan_with_error(self):
+        with patch.object(self.agent, '_get_cached_insights', side_effect=Exception("Test Error")), \
+             patch.object(self.agent, '_handle_error', new=AsyncMock()) as mock_handle_error:
+            await self.agent.generate_plan()
+            mock_handle_error.assert_called_once()
+            args, kwargs = mock_handle_error.call_args
+            self.assertIsInstance(args[0], Exception)
+            self.assertEqual(str(args[0]), "Test Error")
+            self.assertEqual(args[1], {"context": "Geração do plano"})
+
+    async def test_publish_plan(self):
+        with patch.object(self.agent.rabbitmq, 'publish_event', new=AsyncMock()) as mock_publish:
+            await self.agent._publish_plan({"topic": "Test Topic"})
+            mock_publish.assert_called_once()
+            _, kwargs = mock_publish.call_args
+            self.assertEqual(kwargs["routing_key"], "planning.generated")
+            self.assertEqual(kwargs["message"], {"topic": "Test Topic"})
+
+    async def test_handle_error(self):
+        with patch.object(self.agent.rabbitmq, 'publish_event', new=AsyncMock()) as mock_publish:
+            await self.agent._handle_error(Exception("Test Error"), {"context": "Erro de teste"})
+            mock_publish.assert_called_once()
+            _, kwargs = mock_publish.call_args
+            self.assertEqual(kwargs["message"]["error"], "Test Error")
+            self.assertEqual(kwargs["message"]["context"], {"context": "Erro de teste"})
+
+    async def test_cache_key_generation(self):
+        # Patch o model_dump na classe PlanningAgentConfig
+        with patch('agents.planning.config.PlanningAgentConfig.model_dump', return_value={"key1": "value1", "key2": "value2"}):
+            cache_key = self.agent._get_cache_key()
+            self.assertIsInstance(cache_key, int)
 ```
 
 ## tests\test_review.py
@@ -6162,99 +6247,93 @@ if __name__ == "__main__":
    asyncio.run(test_review())
 ```
 
-## tests\test_search.py
+## tests\test_search_agent.py
 
 ```python
-# tests\test_search.py
+import unittest
+from unittest.mock import AsyncMock, MagicMock, patch
+import json
 import asyncio
-import sys
-from pathlib import Path
-from datetime import datetime
+from agents.search.agent import SearchAgent
 
-# Adiciona o diretório raiz ao path
-root_dir = str(Path(__file__).parent.parent)
-sys.path.append(root_dir)
+class TestSearchAgentCompletoEmUmTeste(unittest.IsolatedAsyncioTestCase):
+    async def test_tudo_em_um_unico_teste(self):
+        # Cria instância do agente
+        agent = SearchAgent()
 
-from agents.search.agent import SearchAgent, SearchQuery
-from agents.search.config import SearchAgentConfig
+        # Mock do RabbitMQ
+        agent.rabbitmq = MagicMock()
+        agent.rabbitmq.consume_event = AsyncMock()
+        agent.rabbitmq.publish_event = MagicMock()
 
-async def test_search():
-    # Inicializa o agente
-    agent = SearchAgent()
-    
-    # Cria uma query de teste
-    query = SearchQuery(
-        query="Implementação de MLOps em produção",
-        context="Buscando informações sobre deploy de modelos ML",
-        filters={
-            "language": "pt-br",
-            "max_age_days": 365
+        # Mock da sessão HTTP e clientes
+        agent.session = None
+        with patch('aiohttp.ClientSession', return_value=AsyncMock()) as mock_session:
+            await agent.initialize()  # Testa initialize
+            mock_session.assert_called_once()
+            self.assertIsNotNone(agent.session, "A sessão deveria ter sido criada no initialize")
+
+        # Mockando métodos auxiliares do enrich_content_plan
+        agent.search_recent_developments = AsyncMock(return_value=[{"dev": "recent"}])
+        agent.validate_technical_aspects = AsyncMock(return_value=[{"tech": "valid"}])
+        agent.analyze_similar_content = AsyncMock(return_value=[{"similar": "content"}])
+        agent.gather_seo_insights = AsyncMock(return_value=[{"seo": "insight"}])
+        agent.analyze_audience_preferences = AsyncMock(return_value=[{"audience": "pref"}])
+
+        # Testando start_consuming
+        await agent.start_consuming()
+        agent.rabbitmq.consume_event.assert_awaited_once()
+        args, kwargs = agent.rabbitmq.consume_event.await_args
+        self.assertEqual(args[0], "planning.generated")
+        process_message_callback = args[1]
+
+        # Cria mensagem fake
+        fake_message = {
+            "topic": "test_topic",
+            "keywords": ["test_keyword"],
+            "target_audience": "test_audience"
         }
-    )
-    
-    print("\n=== Teste do Search Agent ===")
-    print(f"\nQuery: {query.query}")
-    print(f"Contexto: {query.context}")
-    
-    try:
-        # Realiza a busca
-        results = await agent.search(query)
-        
-        print(f"\nEncontrados {len(results)} resultados:")
-        for i, result in enumerate(results, 1):
-            print(f"\n--- Resultado {i} ---")
-            print(f"Fonte: {result.source}")
-            print(f"Relevância: {result.relevance_score}")
-            print(f"Timestamp: {result.timestamp}")
-            print(f"Conteúdo: {result.content[:200]}...")
-            if result.metadata:
-                print(f"Metadata: {result.metadata}")
-    
-    except Exception as e:
-        print(f"\nErro durante a busca: {str(e)}")
-        raise
 
-async def test_indexing():
-    # Inicializa o agente
-    agent = SearchAgent()
-    
-    # Conteúdo de teste
-    test_content = """
-    MLOps (Machine Learning Operations) é uma prática que visa automatizar
-    e otimizar o ciclo de vida completo de modelos de machine learning em produção.
-    """
-    
-    metadata = {
-        "source": "test",
-        "author": "AD Team",
-        "timestamp": datetime.now().isoformat(),
-        "category": "MLOps"
-    }
-    
-    print("\n=== Teste de Indexação ===")
-    
-    try:
-        # Indexa o conteúdo
-        await agent.index_content(test_content, metadata)
-        print("\nConteúdo indexado com sucesso!")
-        
-        # Testa a busca do conteúdo indexado
-        query = SearchQuery(
-            query="MLOps automatização",
-            context="Machine Learning Operations"
-        )
-        
-        results = await agent.search(query)
-        print(f"\nBusca após indexação: {len(results)} resultados")
-        
-    except Exception as e:
-        print(f"\nErro durante a indexação: {str(e)}")
-        raise
+        # Chama callback manualmente simulando mensagem recebida
+        await process_message_callback(fake_message)
+
+        # Verifica se os métodos auxiliares foram chamados pelo enrich_content_plan
+        agent.search_recent_developments.assert_awaited_once_with("test_topic")
+        agent.validate_technical_aspects.assert_awaited_once_with("test_topic")
+        agent.analyze_similar_content.assert_awaited_once_with("test_topic", ["test_keyword"])
+        agent.gather_seo_insights.assert_awaited_once_with(["test_keyword"])
+        agent.analyze_audience_preferences.assert_awaited_once_with("test_audience")
+
+        # Verifica se publish_event foi chamado com o resultado agregado
+        agent.rabbitmq.publish_event.assert_called_once()
+        pub_args, pub_kwargs = agent.rabbitmq.publish_event.call_args
+        self.assertEqual(pub_args[0], "search.results")
+        enriched_data = json.loads(pub_args[1])
+        expected_enriched = {
+            "recent_developments": [{"dev": "recent"}],
+            "technical_validations": [{"tech": "valid"}],
+            "competitive_analysis": [{"similar": "content"}],
+            "seo_insights": [{"seo": "insight"}],
+            "audience_insights": [{"audience": "pref"}]
+        }
+        self.assertEqual(enriched_data, expected_enriched)
+
+        # Testa o cache
+        agent.cache = {}
+        key = "test_key"
+        agent.cache[key] = {"data": "cached_value", "timestamp": asyncio.get_running_loop().time()}
+        self.assertIn(key, agent.cache)
+        self.assertEqual(agent.cache[key]["data"], "cached_value")
+
+        # Testa vector store
+        self.assertIsNotNone(agent.vector_store, "Vector store deveria estar configurado")
+
+        # Testa o close
+        await agent.close()
+        self.assertIsNone(agent.session, "A sessão deveria ser None após close()")
 
 if __name__ == "__main__":
-    # Executa os testes
-    asyncio.run(test_search())
-    asyncio.run(test_indexing())
+    unittest.main()
 ```
 
 ## tests\__init__.py

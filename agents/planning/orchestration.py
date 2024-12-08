@@ -9,7 +9,7 @@ from core.rabbitmq_utils import RabbitMQUtils
 from .services.validation import PlanningValidator
 from .services.insights import InsightService
 from .models import PlanningRequest, PlanningResponse, ContentStrategy
-from langchain.chat_models import ChatOpenAI
+from langchain_openai import ChatOpenAI
 from langchain.prompts import PromptTemplate
 from langchain.chains import LLMChain
 from core.config import get_settings

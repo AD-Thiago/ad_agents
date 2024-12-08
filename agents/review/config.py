@@ -1,5 +1,6 @@
 # agents/review/config.py
-from pydantic import BaseSettings, Field
+from pydantic import Field
+from pydantic_settings import BaseSettings
 from typing import Dict, List
 
 class ReviewAgentConfig(BaseSettings):

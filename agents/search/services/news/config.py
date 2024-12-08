@@ -1,4 +1,5 @@
-from pydantic import BaseSettings, Field, validator
+from pydantic import Field, field_validator
+from pydantic_settings import BaseSettings
 from typing import Dict, List, Optional
 from datetime import timedelta
 from pathlib import Path
@@ -68,7 +69,8 @@ class NewsApiConfig(BaseSettings):
         env_file = ".env"
         env_file_encoding = 'utf-8'
 
-    @validator('MAX_SEARCH_PERIOD', pre=True)
+    @field_validator('MAX_SEARCH_PERIOD')
+    @classmethod
     def validate_max_search_period(cls, v):
         if isinstance(v, str):
             try:

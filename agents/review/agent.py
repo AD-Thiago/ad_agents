@@ -1,7 +1,7 @@
 from typing import Dict, List
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field 
 from datetime import datetime
-from langchain.chat_models import ChatOpenAI
+from langchain_openai import ChatOpenAI
 from langchain.chains import LLMChain
 from langchain.prompts import PromptTemplate
 from core.rabbitmq_utils import RabbitMQUtils

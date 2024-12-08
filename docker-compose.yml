@@ -1,15 +1,60 @@
-# File: docker-compose.yml
-version: '3.8'
-
 services:
+  api:
+    build: .
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+    ports:
+      - "8000:8000"
+    environment:
+      PINECONE_API_KEY: ${PINECONE_API_KEY}
+      PINECONE_ENVIRONMENT: ${PINECONE_ENVIRONMENT}
+      PINECONE_INDEX_NAME: ${PINECONE_INDEX_NAME}
+      HF_API_KEY: ${HF_API_KEY}
+      DEV_TO_API_KEY: ${DEV_TO_API_KEY}
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USER: ${RABBITMQ_USER}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: ${DB_NAME}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    volumes:
+      - .:/app
+    depends_on:
+      - rabbitmq
+      - postgres
+      - search_agent
+      - planning_agent
+    networks:
+      - agent_network
+
   rabbitmq:
     image: rabbitmq:3-management
     ports:
       - "5672:5672"
       - "15672:15672"
     environment:
-      - RABBITMQ_DEFAULT_USER=${RABBITMQ_USER}
-      - RABBITMQ_DEFAULT_PASS=${RABBITMQ_PASSWORD}
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    networks:
+      - agent_network
+
+  postgres:
+    image: postgres:15
+    container_name: adagents-db
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
     networks:
       - agent_network
 
@@ -17,15 +62,27 @@ services:
     build: .
     command: python -m scripts.start_agent planning
     environment:
-      - RABBITMQ_HOST=rabbitmq
-      - RABBITMQ_PORT=5672
-      - RABBITMQ_USER=${RABBITMQ_USER}
-      - RABBITMQ_PASSWORD=${RABBITMQ_PASSWORD}
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      PINECONE_API_KEY: ${PINECONE_API_KEY}
+      PINECONE_ENVIRONMENT: ${PINECONE_ENVIRONMENT}
+      PINECONE_INDEX_NAME: ${PINECONE_INDEX_NAME}
+      HF_API_KEY: ${HF_API_KEY}
+      DEV_TO_API_KEY: ${DEV_TO_API_KEY}
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USER: ${RABBITMQ_USER}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
+      OPENAI_API_KEY: ${OPENAI_API_KEY} 
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: ${DB_NAME}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
     volumes:
       - .:/app
     depends_on:
       - rabbitmq
+      - postgres
     networks:
       - agent_network
 
@@ -33,18 +90,36 @@ services:
     build: .
     command: python -m scripts.start_agent search
     environment:
-      - RABBITMQ_HOST=rabbitmq
-      - RABBITMQ_PORT=5672
-      - RABBITMQ_USER=${RABBITMQ_USER}
-      - RABBITMQ_PASSWORD=${RABBITMQ_PASSWORD}
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      PINECONE_API_KEY: ${PINECONE_API_KEY}
+      PINECONE_ENVIRONMENT: ${PINECONE_ENVIRONMENT}
+      PINECONE_INDEX_NAME: ${PINECONE_INDEX_NAME}
+      HF_API_KEY: ${HF_API_KEY}
+      DEV_TO_API_KEY: ${DEV_TO_API_KEY}
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USER: ${RABBITMQ_USER}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: ${DB_NAME}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
     volumes:
       - .:/app
     depends_on:
       - rabbitmq
+      - postgres
     networks:
       - agent_network
 
 networks:
   agent_network:
     driver: bridge
+
+volumes:
+  postgres_data:
+    driver: local
+  rabbitmq_data:
+    driver: local

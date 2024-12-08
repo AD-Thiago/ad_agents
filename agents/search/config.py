@@ -1,7 +1,9 @@
 # agents/search/config.py
-
 from typing import Dict, List, Optional
-from pydantic import BaseSettings, Field, HttpUrl
+from pydantic import Field
+from pydantic_settings import BaseSettings
+from typing import Any
+
 
 class SearchAgentConfig(BaseSettings):
     """Configurações avançadas para o Search Agent"""

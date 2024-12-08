@@ -2,7 +2,7 @@ from typing import List, Dict
 from datetime import datetime
 from langchain.prompts import PromptTemplate
 from langchain.chains import LLMChain
-from langchain.chat_models import ChatOpenAI
+from langchain_openai import ChatOpenAI 
 from core.rabbitmq_utils import RabbitMQUtils
 from core.models import PlanningGenerated, ContentGenerated, ContentImproved
 from pydantic import ValidationError
@@ -10,6 +10,7 @@ from core.config import get_settings
 import json
 import threading
 import logging
+
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("ContentAgent")
@@ -22,7 +23,7 @@ class ContentAgent:
         self.llm = ChatOpenAI(
             model_name=self.settings.api.openai_model,
             temperature=self.settings.api.openai_temperature,
-            openai_api_key=self.settings.api.openai_api_key
+            openai_api_key= self.settings.api.openai_api_key
         )
         self.rabbitmq = RabbitMQUtils()
         self.setup_chains()

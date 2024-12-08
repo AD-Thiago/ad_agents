@@ -1,40 +1,31 @@
 # agents/planning/config.py
+from pydantic_settings import BaseSettings
+from pydantic import Field
 from core.config import get_settings
-from pydantic import BaseSettings
 
 class PlanningAgentConfig(BaseSettings):
     """
     Configurações para o Planning Agent.
-    Estas definições incluem integrações, parâmetros de geração e limites de métricas.
+    Obtém a OPENAI_API_KEY do get_settings().
     """
+    openai_api_key: str = Field(default_factory=lambda: get_settings().OPENAI_API_KEY)
 
-    # OpenAI
-    settings = get_settings()
-    openai_api_key: str = settings.api.openai_api_key
+    temperature: float = Field(0.7, env="PLANNING_TEMPERATURE")
+    max_tokens: int = Field(1500, env="PLANNING_MAX_TOKENS")
+    planning_interval: int = Field(120, env="PLANNING_INTERVAL")
 
-    # Parâmetros do agente
-    temperature: float = 0.7  # Criatividade do modelo
-    max_tokens: int = 1500  # Limite de tokens para geração de conteúdo
-    planning_interval: int = 120  # Intervalo de planejamento (em segundos)
+    min_trend_score: float = Field(0.5, env="PLANNING_MIN_TREND_SCORE")
+    min_relevance_score: float = Field(0.6, env="PLANNING_MIN_RELEVANCE_SCORE")
+    min_confidence_score: float = Field(0.7, env="PLANNING_MIN_CONFIDENCE_SCORE")
 
-    # Limiares para métricas e relevância
-    min_trend_score: float = 0.5  # Score mínimo para considerar uma tendência
-    min_relevance_score: float = 0.6  # Relevância mínima para incluir no plano
-    min_confidence_score: float = 0.7  # Confiança mínima para publicar
+    cache_ttl: int = Field(1800, env="PLANNING_CACHE_TTL")
 
-    # Configurações de cache
-    cache_ttl: int = 1800  # Tempo de vida do cache (em segundos)
+    enable_domain_flexibility: bool = Field(True, env="PLANNING_ENABLE_DOMAIN_FLEXIBILITY")
+    default_domain_priority: str = Field("medium", env="PLANNING_DEFAULT_DOMAIN_PRIORITY")
 
-    # Domínios
-    enable_domain_flexibility: bool = True  # Permite criar planos fora de domínios pré-definidos
-    default_domain_priority: str = "medium"  # Prioridade padrão para planos fora de domínios
-
-    # Configurações de publicação
-    publishing_frequency: str = "daily"  # Frequência de publicação (daily, weekly, monthly)
+    publishing_frequency: str = Field("daily", env="PLANNING_PUBLISHING_FREQUENCY")
 
     class Config:
-        env_prefix = "PLANNING_"  # Prefixo para variáveis de ambiente
+        env_prefix = "PLANNING_"
 
-
-# Instância global de configuração para facilitar o uso
 config = PlanningAgentConfig()
